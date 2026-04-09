@@ -15,6 +15,8 @@ pub trait TmuxAdapter: Send + Sync {
     fn kill_server(&self) -> anyhow::Result<()>;
     fn start_server(&self) -> anyhow::Result<()>;
     fn attach_session(&self, name: &str) -> anyhow::Result<()>;
+    /// Fetch a fresh activity timestamp (Unix epoch seconds) for a single session
+    /// without listing all sessions. Used by InactivityDetector for targeted polling.
     fn session_activity(&self, session: &str) -> anyhow::Result<i64>;
 }
 
@@ -32,8 +34,10 @@ pub trait SystemProbe: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct RawSession {
     pub name: String,
+    /// Unix epoch seconds — tmux returns this as a raw integer.
     pub created: i64,
     pub attached_clients: u32,
+    /// Unix epoch seconds of last session activity.
     pub activity: i64,
 }
 
@@ -65,12 +69,14 @@ pub struct Session {
     pub stats: Option<SessionStats>,
 }
 
+/// Aggregated stats for a tmux session (sum of all pane ProcStats).
 #[derive(Debug, Clone)]
 pub struct SessionStats {
     pub cpu_percent: f32,
     pub memory_bytes: u64,
 }
 
+/// Raw OS stats for a single process. SessionStats aggregates these across all panes in a session.
 #[derive(Debug, Clone)]
 pub struct ProcStats {
     pub cpu_percent: f32,
@@ -137,6 +143,16 @@ pub struct AlertConfig {
     pub warn_pct: u8,
     pub elevated_pct: u8,
     pub crit_pct: u8,
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            warn_pct: 85,
+            elevated_pct: 90,
+            crit_pct: 95,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
