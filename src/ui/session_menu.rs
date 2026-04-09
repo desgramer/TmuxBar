@@ -1,1 +1,297 @@
-// TODO: implement
+use objc2::rc::Retained;
+use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{NSMenu, NSMenuItem};
+use objc2_foundation::NSString;
+
+use crate::models::{Session, SessionStats};
+
+// ---------------------------------------------------------------------------
+// Tag constants for menu item identification
+// ---------------------------------------------------------------------------
+
+/// Tags 0..999 are reserved for session items (index-based).
+pub const TAG_NEW_SESSION: isize = 1000;
+pub const TAG_KILL_SERVER: isize = 1001;
+pub const TAG_SETTINGS: isize = 1002;
+pub const TAG_QUIT: isize = 1003;
+
+// ---------------------------------------------------------------------------
+// SessionMenuBuilder
+// ---------------------------------------------------------------------------
+
+/// Builds an `NSMenu` from a list of tmux sessions.
+///
+/// The menu is rebuilt each time the user clicks the status bar icon, using
+/// fresh session data. Action handling is deferred to the app wiring phase
+/// (Task 15) — items are identified by their `tag` value.
+pub struct SessionMenuBuilder;
+
+impl SessionMenuBuilder {
+    /// Build an `NSMenu` reflecting the current session list.
+    ///
+    /// Each session becomes a menu item with a formatted title and a tag equal
+    /// to its index in `sessions`. Fixed action items ("New Session…", "Kill
+    /// Server", "Settings", "Quit") use well-known tag constants.
+    ///
+    /// No action selectors are wired here — the caller is responsible for
+    /// attaching a delegate or target/action pair to handle clicks.
+    pub fn build_menu(mtm: MainThreadMarker, sessions: &[Session]) -> Retained<NSMenu> {
+        let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("TmuxBar"));
+
+        // --- Session items ---
+        for (idx, session) in sessions.iter().enumerate() {
+            let title = format_session_title(session);
+            let item = make_item(mtm, &title);
+            item.setTag(idx as isize);
+            item.setEnabled(true);
+            menu.addItem(&item);
+        }
+
+        // --- Separator after sessions (only if there are sessions) ---
+        if !sessions.is_empty() {
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
+
+        // --- Fixed action items ---
+        let new_session = make_item(mtm, "New Session...");
+        new_session.setTag(TAG_NEW_SESSION);
+        menu.addItem(&new_session);
+
+        let kill_server = make_item(mtm, "Kill Server");
+        kill_server.setTag(TAG_KILL_SERVER);
+        menu.addItem(&kill_server);
+
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+        let settings = make_item(mtm, "Settings");
+        settings.setTag(TAG_SETTINGS);
+        menu.addItem(&settings);
+
+        let quit = make_item(mtm, "Quit");
+        quit.setTag(TAG_QUIT);
+        menu.addItem(&quit);
+
+        menu
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
+
+/// Format a `chrono::Duration` as `"Xh Ym"`.
+///
+/// Negative or zero durations are rendered as `"0h 0m"`.
+pub fn format_uptime(duration: &chrono::Duration) -> String {
+    let total_secs = duration.num_seconds().max(0);
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    format!("{}h {}m", hours, minutes)
+}
+
+/// Format the complete title for a session menu item.
+///
+/// Pattern: `"<name> (<uptime>) — <command>"` with optional stats suffix.
+pub fn format_session_title(session: &Session) -> String {
+    let uptime = format_uptime(&session.uptime);
+    let mut title = format!("{} ({}) — {}", session.name, uptime, session.foreground_command);
+
+    if let Some(ref stats) = session.stats {
+        let stats_str = format_stats(stats);
+        title.push_str("  ");
+        title.push_str(&stats_str);
+    }
+
+    title
+}
+
+/// Format session statistics as `"CPU: X.X% | MEM: XMB"` or `"CPU: X.X% | MEM: X.XGB"`.
+///
+/// Memory is displayed in GB when >= 1 GB, otherwise in MB.
+pub fn format_stats(stats: &SessionStats) -> String {
+    let mem = format_memory(stats.memory_bytes);
+    format!("CPU: {:.1}% | MEM: {}", stats.cpu_percent, mem)
+}
+
+/// Format a byte count as a human-readable memory string.
+fn format_memory(bytes: u64) -> String {
+    const GB: u64 = 1_073_741_824; // 1024^3
+    const MB: u64 = 1_048_576; // 1024^2
+
+    if bytes >= GB {
+        let gb = bytes as f64 / GB as f64;
+        format!("{:.1}GB", gb)
+    } else {
+        let mb = bytes / MB;
+        format!("{}MB", mb)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Create an `NSMenuItem` with the given title, no action, and no key
+/// equivalent.
+fn make_item(mtm: MainThreadMarker, title: &str) -> Retained<NSMenuItem> {
+    let ns_title = NSString::from_str(title);
+    let empty = NSString::from_str("");
+    // SAFETY: passing `None` for the selector is valid — no action is wired.
+    unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &ns_title,
+            None,
+            &empty,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- format_uptime --------------------------------------------------------
+
+    #[test]
+    fn test_format_uptime_hours_and_minutes() {
+        let d = chrono::Duration::seconds(2 * 3600 + 15 * 60);
+        assert_eq!(format_uptime(&d), "2h 15m");
+    }
+
+    #[test]
+    fn test_format_uptime_zero() {
+        let d = chrono::Duration::seconds(0);
+        assert_eq!(format_uptime(&d), "0h 0m");
+    }
+
+    #[test]
+    fn test_format_uptime_minutes_only() {
+        let d = chrono::Duration::seconds(30 * 60);
+        assert_eq!(format_uptime(&d), "0h 30m");
+    }
+
+    #[test]
+    fn test_format_uptime_large() {
+        let d = chrono::Duration::seconds(48 * 3600 + 59 * 60 + 59);
+        assert_eq!(format_uptime(&d), "48h 59m");
+    }
+
+    #[test]
+    fn test_format_uptime_negative_clamps_to_zero() {
+        let d = chrono::Duration::seconds(-100);
+        assert_eq!(format_uptime(&d), "0h 0m");
+    }
+
+    // -- format_session_title -------------------------------------------------
+
+    #[test]
+    fn test_format_session_title_without_stats() {
+        let session = Session {
+            name: "dev".into(),
+            uptime: chrono::Duration::seconds(2 * 3600 + 15 * 60),
+            foreground_command: "vim".into(),
+            attached_clients: 1,
+            stats: None,
+        };
+        assert_eq!(
+            format_session_title(&session),
+            "dev (2h 15m) — vim"
+        );
+    }
+
+    #[test]
+    fn test_format_session_title_with_stats() {
+        let session = Session {
+            name: "build".into(),
+            uptime: chrono::Duration::seconds(30 * 60),
+            foreground_command: "cargo".into(),
+            attached_clients: 0,
+            stats: Some(SessionStats {
+                cpu_percent: 8.1,
+                memory_bytes: 120 * 1_048_576, // 120 MB
+            }),
+        };
+        assert_eq!(
+            format_session_title(&session),
+            "build (0h 30m) — cargo  CPU: 8.1% | MEM: 120MB"
+        );
+    }
+
+    // -- format_stats ---------------------------------------------------------
+
+    #[test]
+    fn test_format_stats_megabytes() {
+        let stats = SessionStats {
+            cpu_percent: 12.3,
+            memory_bytes: 45 * 1_048_576, // 45 MB
+        };
+        assert_eq!(format_stats(&stats), "CPU: 12.3% | MEM: 45MB");
+    }
+
+    #[test]
+    fn test_format_stats_gigabytes() {
+        let stats = SessionStats {
+            cpu_percent: 5.0,
+            memory_bytes: 2 * 1_073_741_824 + 536_870_912, // 2.5 GB
+        };
+        assert_eq!(format_stats(&stats), "CPU: 5.0% | MEM: 2.5GB");
+    }
+
+    #[test]
+    fn test_format_stats_zero() {
+        let stats = SessionStats {
+            cpu_percent: 0.0,
+            memory_bytes: 0,
+        };
+        assert_eq!(format_stats(&stats), "CPU: 0.0% | MEM: 0MB");
+    }
+
+    #[test]
+    fn test_format_stats_exactly_one_gb() {
+        let stats = SessionStats {
+            cpu_percent: 99.9,
+            memory_bytes: 1_073_741_824, // exactly 1 GB
+        };
+        assert_eq!(format_stats(&stats), "CPU: 99.9% | MEM: 1.0GB");
+    }
+
+    // -- format_memory (indirect) ---------------------------------------------
+
+    #[test]
+    fn test_format_memory_sub_megabyte() {
+        // Less than 1 MB rounds to 0 MB
+        let stats = SessionStats {
+            cpu_percent: 1.0,
+            memory_bytes: 500_000,
+        };
+        assert_eq!(format_stats(&stats), "CPU: 1.0% | MEM: 0MB");
+    }
+
+    // -- Tag constants --------------------------------------------------------
+
+    #[test]
+    fn test_tag_constants_are_distinct() {
+        let tags = [TAG_NEW_SESSION, TAG_KILL_SERVER, TAG_SETTINGS, TAG_QUIT];
+        for (i, a) in tags.iter().enumerate() {
+            for (j, b) in tags.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "tags at index {} and {} must differ", i, j);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_tag_constants_do_not_overlap_session_range() {
+        // Session tags occupy 0..999
+        assert!(TAG_NEW_SESSION >= 1000);
+        assert!(TAG_KILL_SERVER >= 1000);
+        assert!(TAG_SETTINGS >= 1000);
+        assert!(TAG_QUIT >= 1000);
+    }
+}
