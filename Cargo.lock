@@ -915,6 +915,7 @@ dependencies = [
  "chrono",
  "dirs",
  "dispatch2",
+ "libc",
  "notify",
  "objc2",
  "objc2-app-kit",
