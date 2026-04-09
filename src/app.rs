@@ -13,6 +13,7 @@ use crate::core::restart_service::RestartService;
 use crate::core::session_manager::SessionManager;
 use crate::core::snapshot_service::SnapshotService;
 use crate::infra::config::AppConfig;
+use crate::infra::launch_agent::LaunchAgent;
 use crate::infra::log_store::LogStore;
 use crate::infra::sys_probe::MacSysProbe;
 use crate::infra::tmux_client::TmuxClient;
@@ -97,7 +98,14 @@ pub fn run() {
     };
 
     // ------------------------------------------------------------------
-    // b. Create infrastructure adapters
+    // b. Sync launch-at-login state with config
+    // ------------------------------------------------------------------
+    if let Err(e) = LaunchAgent::sync_with_config(config.general.launch_at_login) {
+        tracing::warn!("Failed to sync LaunchAgent with config: {e:#}");
+    }
+
+    // ------------------------------------------------------------------
+    // c. Create infrastructure adapters
     // ------------------------------------------------------------------
     let tmux: Arc<dyn crate::models::TmuxAdapter> =
         Arc::new(TmuxClient::new(&config.terminal.tmux_path));
@@ -113,7 +121,7 @@ pub fn run() {
     };
 
     // ------------------------------------------------------------------
-    // c. Create core services
+    // d. Create core services
     // ------------------------------------------------------------------
     let session_manager = SessionManager::new(
         Arc::clone(&tmux),
