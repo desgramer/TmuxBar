@@ -67,6 +67,16 @@ impl FdAlertPolicy {
         }
     }
 
+    /// Update the alert thresholds and reset notification tracking state.
+    ///
+    /// Called when the config is hot-reloaded.  Resetting `last_notified_pct`
+    /// ensures that the next `evaluate` call fires fresh notifications based on
+    /// the new thresholds.
+    pub fn update_config(&mut self, config: AlertConfig) {
+        self.config = config;
+        self.last_notified_pct = None;
+    }
+
     /// Returns the current alert level based purely on thresholds, without side effects.
     /// Used for icon colour which always reflects the current state.
     pub fn current_level(&self, current_pct: u8) -> AlertLevel {

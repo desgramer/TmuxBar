@@ -13,6 +13,7 @@ use crate::core::restart_service::RestartService;
 use crate::core::session_manager::SessionManager;
 use crate::core::snapshot_service::SnapshotService;
 use crate::infra::config::AppConfig;
+use crate::infra::config_watcher::ConfigWatcher;
 use crate::infra::launch_agent::LaunchAgent;
 use crate::infra::log_store::LogStore;
 use crate::infra::sys_probe::MacSysProbe;
@@ -64,8 +65,11 @@ struct BackgroundServices {
 
 /// Services needed by the monitor event processing loop.
 struct EventServices {
-    fd_alert_policy: FdAlertPolicy,
-    inactivity_detector: InactivityDetector,
+    /// Wrapped in Arc<Mutex<>> so the config hot-reload callback (running on
+    /// the notify thread) can update thresholds without disrupting the event
+    /// processing loop.
+    fd_alert_policy: Arc<Mutex<FdAlertPolicy>>,
+    inactivity_detector: Arc<Mutex<InactivityDetector>>,
     event_logger: EventLogger,
     notification_service: NotificationService,
 }
@@ -136,9 +140,9 @@ pub fn run() {
         64, // broadcast channel capacity
     );
 
-    let fd_alert_policy = FdAlertPolicy::new(config.monitor.alert_config());
+    let fd_alert_policy = Arc::new(Mutex::new(FdAlertPolicy::new(config.monitor.alert_config())));
     let inactivity_timeout_secs = config.monitor.inactivity_timeout_mins * 60;
-    let inactivity_detector = InactivityDetector::new(inactivity_timeout_secs);
+    let inactivity_detector = Arc::new(Mutex::new(InactivityDetector::new(inactivity_timeout_secs)));
     let event_logger = EventLogger::new(log_store);
     let notification_service = NotificationService::new();
 
@@ -193,13 +197,51 @@ pub fn run() {
         session_manager,
         restart_service,
         event_services: EventServices {
-            fd_alert_policy,
-            inactivity_detector,
+            fd_alert_policy: Arc::clone(&fd_alert_policy),
+            inactivity_detector: Arc::clone(&inactivity_detector),
             event_logger,
             notification_service,
         },
         cmd_rx,
         shared_state: Arc::clone(&shared_state),
+    };
+
+    // ------------------------------------------------------------------
+    // e. Start config hot-reload watcher
+    // ------------------------------------------------------------------
+    let watcher_fd_policy = Arc::clone(&fd_alert_policy);
+    let watcher_inactivity = Arc::clone(&inactivity_detector);
+    let _config_watcher = match ConfigWatcher::start(
+        AppConfig::config_path(),
+        move |new_cfg: AppConfig| {
+            tracing::info!("Config reloaded");
+
+            // Update FdAlertPolicy thresholds and reset state.
+            {
+                let mut policy = watcher_fd_policy.lock().unwrap();
+                policy.update_config(new_cfg.monitor.alert_config());
+            }
+
+            // Update InactivityDetector timeout.
+            {
+                let mut detector = watcher_inactivity.lock().unwrap();
+                detector.update_timeout(new_cfg.monitor.inactivity_timeout_mins * 60);
+            }
+
+            // Sync LaunchAgent with the new launch_at_login setting.
+            if let Err(e) = LaunchAgent::sync_with_config(new_cfg.general.launch_at_login) {
+                tracing::warn!("Config reload: failed to sync LaunchAgent: {e:#}");
+            }
+        },
+    ) {
+        Ok(w) => {
+            tracing::info!("Config watcher started for {}", AppConfig::config_path().display());
+            Some(w)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to start config watcher: {e:#}");
+            None
+        }
     };
 
     std::thread::spawn(move || {
@@ -391,8 +433,12 @@ fn handle_monitor_event(
     services: &mut EventServices,
     shared_state: &Arc<Mutex<AppState>>,
 ) {
-    // 1. Evaluate fd alert policy
-    if let Some(level) = services.fd_alert_policy.evaluate(event.fd_percent) {
+    // 1. Evaluate fd alert policy (lock only for the duration of the call).
+    let fd_alert_opt = {
+        let mut policy = services.fd_alert_policy.lock().unwrap();
+        policy.evaluate(event.fd_percent)
+    };
+    if let Some(level) = fd_alert_opt {
         if let Err(e) = services
             .notification_service
             .send_fd_alert(event.fd_percent, &level)
@@ -402,7 +448,10 @@ fn handle_monitor_event(
     }
 
     // 2. Update shared state
-    let alert_level = services.fd_alert_policy.current_level(event.fd_percent);
+    let alert_level = {
+        let policy = services.fd_alert_policy.lock().unwrap();
+        policy.current_level(event.fd_percent)
+    };
     let sessions: Vec<Session> = event
         .sessions
         .iter()
@@ -433,9 +482,10 @@ fn handle_monitor_event(
 
     // 4. Check inactivity
     let now = chrono::Utc::now().timestamp();
-    let idle_sessions = services
-        .inactivity_detector
-        .check_inactive(&event.sessions, now);
+    let idle_sessions = {
+        let detector = services.inactivity_detector.lock().unwrap();
+        detector.check_inactive(&event.sessions, now)
+    };
     for session_name in &idle_sessions {
         let mins = (now
             - event
