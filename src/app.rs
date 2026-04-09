@@ -14,6 +14,7 @@ use crate::core::session_manager::SessionManager;
 use crate::core::snapshot_service::SnapshotService;
 use crate::infra::config::AppConfig;
 use crate::infra::config_watcher::ConfigWatcher;
+use crate::infra::instance_lock::InstanceLock;
 use crate::infra::launch_agent::LaunchAgent;
 use crate::infra::log_store::LogStore;
 use crate::infra::sys_probe::MacSysProbe;
@@ -54,9 +55,12 @@ impl Default for AppState {
 
 /// Services that run on the Tokio background thread.
 struct BackgroundServices {
-    monitor_service: MonitorService,
-    monitor_rx: broadcast::Receiver<MonitorEvent>,
-    session_manager: SessionManager,
+    /// `None` when tmux is not available.
+    monitor_service: Option<MonitorService>,
+    /// `None` when tmux is not available.
+    monitor_rx: Option<broadcast::Receiver<MonitorEvent>>,
+    /// `None` when tmux is not available.
+    session_manager: Option<SessionManager>,
     restart_service: Option<RestartService>,
     event_services: EventServices,
     cmd_rx: mpsc::Receiver<AppCommand>,
@@ -70,7 +74,8 @@ struct EventServices {
     /// processing loop.
     fd_alert_policy: Arc<Mutex<FdAlertPolicy>>,
     inactivity_detector: Arc<Mutex<InactivityDetector>>,
-    event_logger: EventLogger,
+    /// `None` when the log store failed to open; fd spikes are silently dropped.
+    event_logger: Option<EventLogger>,
     notification_service: NotificationService,
 }
 
@@ -78,83 +83,141 @@ struct EventServices {
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// Check whether the configured tmux binary is reachable and executable.
+///
+/// Returns `true` if `tmux -V` runs successfully, `false` otherwise.
+/// A `false` result means the MonitorService and SessionManager will be skipped.
+fn check_tmux_available(tmux_path: &str) -> bool {
+    match std::process::Command::new(tmux_path).arg("-V").output() {
+        Ok(out) if out.status.success() => true,
+        Ok(out) => {
+            tracing::warn!(
+                "tmux binary at '{tmux_path}' returned non-zero status: {}",
+                out.status
+            );
+            false
+        }
+        Err(e) => {
+            tracing::warn!(
+                "tmux not found at '{tmux_path}': {e:#}. \
+                 Session features will be disabled."
+            );
+            false
+        }
+    }
+}
+
 /// Wire all services together and run the application.
 ///
-/// 1. Loads configuration.
-/// 2. Creates infrastructure adapters and core services.
-/// 3. Spawns a Tokio runtime on a background thread for monitoring and
+/// 1. Acquires an instance lock (exits if another TmuxBar is already running).
+/// 2. Loads configuration.
+/// 3. Creates infrastructure adapters and core services.
+/// 4. Spawns a Tokio runtime on a background thread for monitoring and
 ///    command processing.
-/// 4. Runs the AppKit event loop on the main thread.
+/// 5. Runs the AppKit event loop on the main thread.
 pub fn run() {
     // Must be on the main thread for AppKit.
     let mtm = MainThreadMarker::new().expect("TmuxBar must run on the main thread");
 
     // ------------------------------------------------------------------
-    // a. Load config
+    // a. Acquire instance lock — exit immediately if another instance runs
+    // ------------------------------------------------------------------
+    let _instance_lock = match InstanceLock::acquire() {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("TmuxBar: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // b. Load config
     // ------------------------------------------------------------------
     let config = match AppConfig::load() {
         Ok(cfg) => cfg,
         Err(e) => {
-            tracing::error!("Failed to load config: {e:#}");
-            tracing::info!("Falling back to default config");
+            let path = AppConfig::config_path();
+            eprintln!(
+                "TmuxBar: failed to load config from {}: {e:#}\nFalling back to defaults.",
+                path.display()
+            );
+            tracing::warn!(
+                "Failed to load config from {}: {e:#}. Using defaults.",
+                path.display()
+            );
             AppConfig::default()
         }
     };
 
     // ------------------------------------------------------------------
-    // b. Sync launch-at-login state with config
+    // c. Sync launch-at-login state with config
     // ------------------------------------------------------------------
     if let Err(e) = LaunchAgent::sync_with_config(config.general.launch_at_login) {
         tracing::warn!("Failed to sync LaunchAgent with config: {e:#}");
     }
 
     // ------------------------------------------------------------------
-    // c. Create infrastructure adapters
+    // d. Create infrastructure adapters
     // ------------------------------------------------------------------
+    let tmux_available = check_tmux_available(&config.terminal.tmux_path);
+
     let tmux: Arc<dyn crate::models::TmuxAdapter> =
         Arc::new(TmuxClient::new(&config.terminal.tmux_path));
     let sys_probe: Arc<dyn crate::models::SystemProbe> = Arc::new(MacSysProbe::new());
-    let log_store = match LogStore::new(&LogStore::default_path()) {
-        Ok(store) => store,
+
+    // LogStore: warn and continue without logging on failure.
+    let log_store_opt = match LogStore::new(&LogStore::default_path()) {
+        Ok(store) => Some(store),
         Err(e) => {
-            tracing::error!("Failed to open log store: {e:#}");
-            // Create an in-memory fallback so the app can still launch.
-            LogStore::new(std::path::Path::new(":memory:"))
-                .expect("in-memory LogStore should never fail")
+            tracing::warn!(
+                "Failed to open log store (fd spikes will not be persisted): {e:#}"
+            );
+            None
         }
     };
 
     // ------------------------------------------------------------------
-    // d. Create core services
+    // e. Create core services (some conditional on tmux availability)
     // ------------------------------------------------------------------
-    let session_manager = SessionManager::new(
-        Arc::clone(&tmux),
-        &config.terminal.app,
-        &config.terminal.tmux_path,
-    );
-
-    let (monitor_service, monitor_rx) = MonitorService::new(
-        Arc::clone(&tmux),
-        Arc::clone(&sys_probe),
-        config.monitor.poll_interval_secs,
-        64, // broadcast channel capacity
-    );
-
     let fd_alert_policy = Arc::new(Mutex::new(FdAlertPolicy::new(config.monitor.alert_config())));
     let inactivity_timeout_secs = config.monitor.inactivity_timeout_mins * 60;
     let inactivity_detector = Arc::new(Mutex::new(InactivityDetector::new(inactivity_timeout_secs)));
-    let event_logger = EventLogger::new(log_store);
+    let event_logger = log_store_opt.map(EventLogger::new);
     let notification_service = NotificationService::new();
 
+    // MonitorService and SessionManager are only created when tmux is reachable.
+    let (monitor_service_opt, monitor_rx_opt, session_manager_opt) = if tmux_available {
+        let session_manager = SessionManager::new(
+            Arc::clone(&tmux),
+            &config.terminal.app,
+            &config.terminal.tmux_path,
+        );
+        let (monitor_service, monitor_rx) = MonitorService::new(
+            Arc::clone(&tmux),
+            Arc::clone(&sys_probe),
+            config.monitor.poll_interval_secs,
+            64, // broadcast channel capacity
+        );
+        (Some(monitor_service), Some(monitor_rx), Some(session_manager))
+    } else {
+        tracing::warn!(
+            "tmux not available — MonitorService and SessionManager are disabled."
+        );
+        (None, None, None)
+    };
+
     let snapshot_dir = PathBuf::from(&config.snapshots.dir);
-    let snapshot_service_opt: Option<Arc<SnapshotService>> =
+    let snapshot_service_opt: Option<Arc<SnapshotService>> = if tmux_available {
         match SnapshotService::new(Arc::clone(&tmux), snapshot_dir) {
             Ok(svc) => Some(Arc::new(svc)),
             Err(e) => {
                 tracing::error!("Failed to create SnapshotService: {e:#}");
                 None
             }
-        };
+        }
+    } else {
+        None
+    };
 
     // RestartService uses its own EventLogger and NotificationService instances
     // (LogStore / rusqlite::Connection is not Sync so cannot be shared via Arc
@@ -165,15 +228,17 @@ pub fn run() {
         // RestartService owns it inside a Mutex so the overall type is Send.
         // We open a second connection to the same WAL-mode DB file — this is
         // the standard SQLite multi-reader approach.
-        let restart_log_store = match LogStore::new(&LogStore::default_path()) {
-            Ok(s) => s,
-            Err(_) => LogStore::new(std::path::Path::new(":memory:"))
-                .expect("in-memory LogStore should never fail"),
+        let restart_log_store_opt = match LogStore::new(&LogStore::default_path()) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!("RestartService: failed to open log store: {e:#}");
+                None
+            }
         };
         RestartService::new(
             ss,
             Arc::clone(&tmux),
-            EventLogger::new(restart_log_store),
+            restart_log_store_opt.map(EventLogger::new),
             NotificationService::new(),
         )
     });
@@ -192,9 +257,9 @@ pub fn run() {
     // f. Spawn Tokio runtime on background thread
     // ------------------------------------------------------------------
     let bg_services = BackgroundServices {
-        monitor_service,
-        monitor_rx,
-        session_manager,
+        monitor_service: monitor_service_opt,
+        monitor_rx: monitor_rx_opt,
+        session_manager: session_manager_opt,
         restart_service,
         event_services: EventServices {
             fd_alert_policy: Arc::clone(&fd_alert_policy),
@@ -335,41 +400,65 @@ async fn run_background(services: BackgroundServices) {
         shared_state,
     } = services;
 
-    // Spawn the MonitorService polling loop as a background task.
-    let monitor_handle = tokio::spawn(async move {
-        if let Err(e) = monitor_service.run().await {
-            tracing::error!("MonitorService exited with error: {e:#}");
-        }
+    // Spawn the MonitorService polling loop as a background task (only when tmux is available).
+    let monitor_handle = monitor_service.map(|svc| {
+        tokio::spawn(async move {
+            if let Err(e) = svc.run().await {
+                tracing::error!("MonitorService exited with error: {e:#}");
+            }
+        })
     });
 
-    // Spawn monitor event processing loop.
-    let event_state = Arc::clone(&shared_state);
-    tokio::spawn(async move {
-        process_monitor_events(monitor_rx, event_services, event_state).await;
-    });
+    // Spawn monitor event processing loop (only when tmux is available).
+    if let Some(rx) = monitor_rx {
+        let event_state = Arc::clone(&shared_state);
+        tokio::spawn(async move {
+            process_monitor_events(rx, event_services, event_state).await;
+        });
+    }
 
     // Process commands from the UI on this task.
     while let Some(cmd) = cmd_rx.recv().await {
         tracing::debug!(?cmd, "Received AppCommand");
         match cmd {
             AppCommand::CreateSession { name } => {
-                if let Err(e) = session_manager.create_and_attach(&name) {
-                    tracing::error!("Failed to create session '{name}': {e:#}");
+                match &session_manager {
+                    Some(mgr) => {
+                        if let Err(e) = mgr.create_and_attach(&name) {
+                            tracing::error!("Failed to create session '{name}': {e:#}");
+                        }
+                    }
+                    None => tracing::warn!("CreateSession: tmux unavailable"),
                 }
             }
             AppCommand::AttachSession { name } => {
-                if let Err(e) = session_manager.attach(&name) {
-                    tracing::error!("Failed to attach session '{name}': {e:#}");
+                match &session_manager {
+                    Some(mgr) => {
+                        if let Err(e) = mgr.attach(&name) {
+                            tracing::error!("Failed to attach session '{name}': {e:#}");
+                        }
+                    }
+                    None => tracing::warn!("AttachSession: tmux unavailable"),
                 }
             }
             AppCommand::KillSession { name } => {
-                if let Err(e) = session_manager.kill_session(&name) {
-                    tracing::error!("Failed to kill session '{name}': {e:#}");
+                match &session_manager {
+                    Some(mgr) => {
+                        if let Err(e) = mgr.kill_session(&name) {
+                            tracing::error!("Failed to kill session '{name}': {e:#}");
+                        }
+                    }
+                    None => tracing::warn!("KillSession: tmux unavailable"),
                 }
             }
             AppCommand::KillServer => {
-                if let Err(e) = session_manager.kill_server() {
-                    tracing::error!("Failed to kill server: {e:#}");
+                match &session_manager {
+                    Some(mgr) => {
+                        if let Err(e) = mgr.kill_server() {
+                            tracing::error!("Failed to kill server: {e:#}");
+                        }
+                    }
+                    None => tracing::warn!("KillServer: tmux unavailable"),
                 }
             }
             AppCommand::RestartServer => {
@@ -391,8 +480,10 @@ async fn run_background(services: BackgroundServices) {
         }
     }
 
-    // Clean up: abort the monitor loop.
-    monitor_handle.abort();
+    // Clean up: abort the monitor loop if it was started.
+    if let Some(handle) = monitor_handle {
+        handle.abort();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -503,10 +594,12 @@ fn handle_monitor_event(
         }
     }
 
-    // 5. Log fd spike if above warning threshold
+    // 5. Log fd spike if above warning threshold (skipped if no log store)
     if event.fd_percent >= 85 {
-        if let Err(e) = services.event_logger.log_fd_spike(event.fd_percent) {
-            tracing::warn!("Failed to log fd spike: {e:#}");
+        if let Some(ref mut logger) = services.event_logger {
+            if let Err(e) = logger.log_fd_spike(event.fd_percent) {
+                tracing::warn!("Failed to log fd spike: {e:#}");
+            }
         }
     }
 }

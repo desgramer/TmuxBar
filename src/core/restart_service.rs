@@ -28,16 +28,20 @@ use crate::ui::notifications::NotificationService;
 pub struct RestartService {
     snapshot_service: Arc<SnapshotService>,
     tmux: Arc<dyn TmuxAdapter>,
-    event_logger: Mutex<EventLogger>,
+    /// `None` when the log store is unavailable; phase logging is silently skipped.
+    event_logger: Mutex<Option<EventLogger>>,
     notification_service: NotificationService,
 }
 
 impl RestartService {
     /// Construct a new `RestartService`.
+    ///
+    /// Pass `None` for `event_logger` when the log store is unavailable; phase
+    /// events will be silently skipped in that case.
     pub fn new(
         snapshot_service: Arc<SnapshotService>,
         tmux: Arc<dyn TmuxAdapter>,
-        event_logger: EventLogger,
+        event_logger: Option<EventLogger>,
         notification_service: NotificationService,
     ) -> Self {
         Self {
@@ -54,11 +58,14 @@ impl RestartService {
     /// save failed (the only hard-abort condition).
     pub fn execute_restart(&self) -> Result<()> {
         // Helper: log a phase result through the Mutex-guarded EventLogger.
+        // Silently skipped when no log store is available.
         let log_phase = |phase: RestartPhase, success: bool| {
             match self.event_logger.lock() {
-                Ok(logger) => {
-                    if let Err(e) = logger.log_safe_restart(phase, success) {
-                        tracing::warn!("Failed to log restart phase: {e:#}");
+                Ok(mut guard) => {
+                    if let Some(ref mut logger) = *guard {
+                        if let Err(e) = logger.log_safe_restart(phase, success) {
+                            tracing::warn!("Failed to log restart phase: {e:#}");
+                        }
                     }
                 }
                 Err(e) => tracing::warn!("EventLogger mutex poisoned: {e}"),
@@ -310,7 +317,7 @@ mod tests {
 
         let log_store = LogStore::new(std::path::Path::new(":memory:"))
             .expect("in-memory LogStore");
-        let event_logger = EventLogger::new(log_store);
+        let event_logger = Some(EventLogger::new(log_store));
         let notification_service = NotificationService::new();
 
         let svc = RestartService::new(
@@ -379,7 +386,7 @@ mod tests {
         );
         let log_store = LogStore::new(std::path::Path::new(":memory:"))
             .expect("in-memory LogStore");
-        let event_logger = EventLogger::new(log_store);
+        let event_logger = Some(EventLogger::new(log_store));
         let notification_service = NotificationService::new();
 
         let svc = RestartService::new(
@@ -429,7 +436,7 @@ mod tests {
         );
         let log_store = LogStore::new(std::path::Path::new(":memory:"))
             .expect("in-memory LogStore");
-        let event_logger = EventLogger::new(log_store);
+        let event_logger = Some(EventLogger::new(log_store));
         let notification_service = NotificationService::new();
 
         let svc = RestartService::new(
@@ -495,7 +502,7 @@ mod tests {
 
         let log_store = LogStore::new(std::path::Path::new(":memory:"))
             .expect("in-memory LogStore");
-        let event_logger = EventLogger::new(log_store);
+        let event_logger = Some(EventLogger::new(log_store));
         let notification_service = NotificationService::new();
 
         let svc = RestartService::new(
