@@ -137,7 +137,9 @@ impl AppConfig {
                 .context("failed to serialize default config")?;
             std::fs::write(&path, &toml_str)
                 .with_context(|| format!("failed to write default config to {}", path.display()))?;
-            return Ok(default_cfg);
+            let mut cfg = default_cfg;
+            cfg.expand_tilde();
+            return Ok(cfg);
         }
 
         let raw = std::fs::read_to_string(&path)
