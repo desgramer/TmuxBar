@@ -6,6 +6,14 @@ use tracing;
 
 use crate::models::{Session, TmuxAdapter};
 
+/// Sanitize a string for safe interpolation into AppleScript/shell commands.
+/// Removes characters that could escape string context.
+fn sanitize_for_shell(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .collect()
+}
+
 /// Manages tmux session CRUD operations and terminal attachment.
 ///
 /// Delegates all tmux interactions to the injected `TmuxAdapter`, and spawns
@@ -106,18 +114,13 @@ impl SessionManager {
     /// If the configured terminal is Ghostty, we attempt `open -na Ghostty.app`.
     /// If that spawn fails we fall back to Terminal.app via osascript.
     fn open_terminal(&self, session_name: &str) -> Result<()> {
+        let safe_name = sanitize_for_shell(session_name);
+
         if self.terminal_app.eq_ignore_ascii_case("ghostty") {
+            // Ghostty's -e expects the full command as a single argument.
+            let cmd = format!("{} attach -t {}", self.tmux_path, safe_name);
             let result = Command::new("open")
-                .args([
-                    "-na",
-                    "Ghostty.app",
-                    "--args",
-                    "-e",
-                    &self.tmux_path,
-                    "attach",
-                    "-t",
-                    session_name,
-                ])
+                .args(["-na", "Ghostty.app", "--args", "-e", &cmd])
                 .spawn();
 
             match result {
@@ -136,8 +139,8 @@ impl SessionManager {
             .args([
                 "-e",
                 &format!(
-                    r#"tell application "Terminal" to do script "{} attach -t {}"#,
-                    self.tmux_path, session_name
+                    r#"tell application "Terminal" to do script "{} attach -t {}""#,
+                    self.tmux_path, safe_name
                 ),
             ])
             .spawn()?;
