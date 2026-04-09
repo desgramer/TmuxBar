@@ -21,7 +21,7 @@ cargo fmt -- --check           # format check
 
 ## Architecture (3-layer)
 
-**UI Layer** (`src/ui/`) — AppKit via `objc2`/`objc2-app-kit`. NSStatusItem (menu bar icon with green/yellow/red states), NSMenu (session list), UNUserNotificationCenter (fd alerts with "Restart now" action).
+**UI Layer** (`src/ui/`) — AppKit via `objc2`/`objc2-app-kit`. NSStatusItem (menu bar icon with coloured Unicode glyphs), NSMenu (session list with stats), notifications via `osascript` (graceful degradation).
 
 **Core Services** (`src/core/`) — Business logic, all testable without macOS UI:
 - `SessionManager` — CRUD sessions, spawn terminal (Ghostty: `open -na Ghostty.app --args -e`; Terminal.app: `osascript`). Falls back from Ghostty to Terminal.app.
@@ -30,12 +30,16 @@ cargo fmt -- --check           # format check
 - `SnapshotService` — Serializes sessions to JSON (windows, panes, working dirs, layouts). Used during safe restart.
 - `InactivityDetector` — Per-session last-activity tracking via `#{session_activity}`.
 - `EventLogger` — Structured events to SQLite.
+- `RestartService` — Orchestrates snapshot→kill→start→restore with per-phase logging.
 
 **Infrastructure Adapters** (`src/infra/`) — All external deps behind traits for testability:
 - `TmuxAdapter` trait / `TmuxClient` — wraps tmux CLI via `std::process::Command`
 - `SystemProbe` trait / `SysProbe` — `sysctl` FFI for fd stats (kern.num_files/kern.maxfiles) + `sysinfo` crate for per-process CPU/RSS
 - `Config` — TOML with hot-reload via `notify` crate. Path: `~/.config/tmuxbar/config.toml`
-- `LogStore` — SQLite at `~/.local/share/tmuxbar/logs.db`
+- `LogStore` — SQLite WAL at `~/.local/share/tmuxbar/logs.db`
+- `ConfigWatcher` — File watcher with 500ms debounce for config hot-reload
+- `LaunchAgent` — Manages `~/Library/LaunchAgents/com.tmuxbar.plist` for login launch
+- `InstanceLock` — File lock (`flock`) preventing multiple instances
 
 ## Key Design Decisions
 
@@ -47,4 +51,15 @@ cargo fmt -- --check           # format check
 
 ## Key Crates
 
-`objc2` + `objc2-app-kit` + `dispatch2` (AppKit/GCD bindings), `tokio` (async), `sysinfo` (process stats), `rusqlite` (SQLite WAL), `serde` + `toml` (config), `notify` (file watcher), `tracing` (logging), `anyhow`/`thiserror` (errors)
+`objc2` + `objc2-app-kit` + `dispatch2` (AppKit/GCD bindings), `tokio` (async), `sysinfo` (process stats), `rusqlite` (SQLite WAL), `serde` + `toml` (config), `notify` (file watcher), `libc` (sysctl FFI + flock), `tracing` (logging), `anyhow`/`thiserror` (errors)
+
+## Testing
+
+149 tests, 0 clippy warnings. All core services are tested with mock adapters (MockTmux, MockSysProbe). UI tests are limited to formatting helpers since AppKit requires main thread + NSApplication event loop.
+
+```bash
+cargo test                                    # all 149 tests
+cargo test core::fd_alert_policy              # state machine tests (21)
+cargo test infra::config                      # config round-trip tests (16)
+cargo test core::restart_service              # restart flow tests (5)
+```
