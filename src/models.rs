@@ -18,6 +18,10 @@ pub trait TmuxAdapter: Send + Sync {
     /// Fetch a fresh activity timestamp (Unix epoch seconds) for a single session
     /// without listing all sessions. Used by InactivityDetector for targeted polling.
     fn session_activity(&self, session: &str) -> anyhow::Result<i64>;
+    fn new_window(&self, session: &str, name: &str) -> anyhow::Result<()>;
+    fn split_window(&self, session: &str, window: &str) -> anyhow::Result<()>;
+    fn send_keys(&self, target: &str, keys: &str) -> anyhow::Result<()>;
+    fn select_layout(&self, target: &str, layout: &str) -> anyhow::Result<()>;
 }
 
 /// Abstraction over OS-level system metrics.

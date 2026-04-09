@@ -103,28 +103,37 @@ impl SnapshotService {
 
     /// Restore a session from a [`SessionSnapshot`].
     ///
-    /// Currently creates the tmux session and sends `cd` keys to the first pane
-    /// of the first window so the shell lands in the correct working directory.
-    ///
-    /// Full window/pane restore requires additional `TmuxAdapter` methods
-    /// (`new_window`, `split_window`, `send_keys`) which have not yet been added
-    /// to the trait. Those can be wired up here once they exist.
+    /// Recreates the session with all windows, panes, and working directories.
+    /// For each window the panes are split, each pane receives a `cd` command,
+    /// and the recorded tmux layout is applied.
     pub fn restore_session(&self, snapshot: &SessionSnapshot) -> Result<()> {
         self.tmux.new_session(&snapshot.name)?;
 
-        // Navigate the first pane of the first window to its recorded working dir.
-        // Additional windows/panes beyond the first are noted but require trait extension.
-        if let Some(first_window) = snapshot.windows.first() {
-            if let Some(first_pane) = first_window.panes.first() {
-                // TODO: call tmux.send_keys(session, "0", "0", &format!("cd {}", first_pane.working_dir))
-                // once send_keys is added to TmuxAdapter.
-                let _ = &first_pane.working_dir; // referenced to avoid dead-code warning
+        for (window_idx, window) in snapshot.windows.iter().enumerate() {
+            // The first window is created automatically with new_session; only
+            // create explicit new windows for index 1+.
+            if window_idx > 0 {
+                self.tmux.new_window(&snapshot.name, &window.name)?;
             }
 
-            // TODO: for windows[1..] call tmux.new_window(session, &window.name)
-            // once new_window is added to TmuxAdapter.
-            // TODO: for panes[1..] within each window call tmux.split_window(session, window_index)
-            // once split_window is added to TmuxAdapter.
+            let window_idx_str = window_idx.to_string();
+
+            // Split additional panes (pane 0 exists already for every window).
+            for pane_idx in 1..window.panes.len() {
+                let _ = pane_idx; // index only used for count
+                self.tmux.split_window(&snapshot.name, &window_idx_str)?;
+            }
+
+            // Send each pane to its recorded working directory.
+            for pane in &window.panes {
+                let target = format!("{}:{}.{}", snapshot.name, window_idx, pane.index);
+                self.tmux
+                    .send_keys(&target, &format!("cd {}", pane.working_dir))?;
+            }
+
+            // Apply the recorded layout for this window.
+            let layout_target = format!("{}:{}", snapshot.name, window_idx);
+            self.tmux.select_layout(&layout_target, &window.layout)?;
         }
 
         Ok(())
@@ -300,6 +309,26 @@ mod tests {
             self.record(format!("session_activity:{session}"));
             Ok(0)
         }
+
+        fn new_window(&self, session: &str, name: &str) -> Result<()> {
+            self.record(format!("new_window:{session}:{name}"));
+            Ok(())
+        }
+
+        fn split_window(&self, session: &str, window: &str) -> Result<()> {
+            self.record(format!("split_window:{session}:{window}"));
+            Ok(())
+        }
+
+        fn send_keys(&self, target: &str, keys: &str) -> Result<()> {
+            self.record(format!("send_keys:{target}:{keys}"));
+            Ok(())
+        }
+
+        fn select_layout(&self, target: &str, layout: &str) -> Result<()> {
+            self.record(format!("select_layout:{target}:{layout}"));
+            Ok(())
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -470,6 +499,125 @@ mod tests {
         assert!(
             log.contains(&"new_session:proj".to_string()),
             "expected new_session:proj in {log:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // restore_session — verifies correct sequence of tmux calls
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_restore_session_single_window_single_pane() {
+        let mock = Arc::new(MockTmux::new(vec![], vec![], vec![]));
+        let (svc, _tmp) = make_service(mock.clone());
+
+        let snapshot = SessionSnapshot {
+            name: "myapp".to_string(),
+            windows: vec![WindowSnapshot {
+                name: "editor".to_string(),
+                layout: "main-vertical".to_string(),
+                panes: vec![PaneSnapshot {
+                    working_dir: "/home/user/project".to_string(),
+                    index: 0,
+                }],
+            }],
+        };
+
+        svc.restore_session(&snapshot).expect("restore_session should succeed");
+
+        let log = mock.call_log();
+
+        // Session must be created
+        assert!(
+            log.contains(&"new_session:myapp".to_string()),
+            "expected new_session:myapp in {log:?}"
+        );
+        // cd command sent to first pane
+        assert!(
+            log.contains(&"send_keys:myapp:0.0:cd /home/user/project".to_string()),
+            "expected send_keys for pane 0 in {log:?}"
+        );
+        // Layout applied
+        assert!(
+            log.contains(&"select_layout:myapp:0:main-vertical".to_string()),
+            "expected select_layout in {log:?}"
+        );
+        // No new_window for single-window snapshots
+        assert!(
+            !log.iter().any(|e| e.starts_with("new_window:")),
+            "unexpected new_window call for single-window snapshot in {log:?}"
+        );
+    }
+
+    #[test]
+    fn test_restore_session_multiple_windows_and_panes() {
+        let mock = Arc::new(MockTmux::new(vec![], vec![], vec![]));
+        let (svc, _tmp) = make_service(mock.clone());
+
+        let snapshot = SessionSnapshot {
+            name: "work".to_string(),
+            windows: vec![
+                WindowSnapshot {
+                    name: "code".to_string(),
+                    layout: "even-horizontal".to_string(),
+                    panes: vec![
+                        PaneSnapshot { working_dir: "/src".to_string(), index: 0 },
+                        PaneSnapshot { working_dir: "/src/tests".to_string(), index: 1 },
+                    ],
+                },
+                WindowSnapshot {
+                    name: "server".to_string(),
+                    layout: "main-vertical".to_string(),
+                    panes: vec![
+                        PaneSnapshot { working_dir: "/srv".to_string(), index: 0 },
+                    ],
+                },
+            ],
+        };
+
+        svc.restore_session(&snapshot).expect("restore_session should succeed");
+
+        let log = mock.call_log();
+
+        // Session created
+        assert!(log.contains(&"new_session:work".to_string()), "{log:?}");
+
+        // Second window created explicitly
+        assert!(
+            log.contains(&"new_window:work:server".to_string()),
+            "expected new_window:work:server in {log:?}"
+        );
+
+        // Extra pane split for window 0 (has 2 panes → 1 split)
+        assert!(
+            log.contains(&"split_window:work:0".to_string()),
+            "expected split_window for window 0 in {log:?}"
+        );
+
+        // cd sent to both panes of window 0
+        assert!(
+            log.contains(&"send_keys:work:0.0:cd /src".to_string()),
+            "{log:?}"
+        );
+        assert!(
+            log.contains(&"send_keys:work:0.1:cd /src/tests".to_string()),
+            "{log:?}"
+        );
+
+        // cd sent to pane in window 1
+        assert!(
+            log.contains(&"send_keys:work:1.0:cd /srv".to_string()),
+            "{log:?}"
+        );
+
+        // Layouts applied
+        assert!(
+            log.contains(&"select_layout:work:0:even-horizontal".to_string()),
+            "{log:?}"
+        );
+        assert!(
+            log.contains(&"select_layout:work:1:main-vertical".to_string()),
+            "{log:?}"
         );
     }
 

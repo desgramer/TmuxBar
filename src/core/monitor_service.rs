@@ -233,6 +233,11 @@ mod tests {
         fn session_activity(&self, _session: &str) -> Result<i64> {
             Ok(0)
         }
+
+        fn new_window(&self, _session: &str, _name: &str) -> anyhow::Result<()> { Ok(()) }
+        fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> { Ok(()) }
+        fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> { Ok(()) }
+        fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> { Ok(()) }
     }
 
     // -----------------------------------------------------------------------

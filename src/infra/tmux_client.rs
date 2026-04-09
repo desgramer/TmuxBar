@@ -213,6 +213,27 @@ impl TmuxAdapter for TmuxClient {
             .parse::<i64>()
             .with_context(|| format!("could not parse session_activity as i64: '{}'", output))
     }
+
+    fn new_window(&self, session: &str, name: &str) -> Result<()> {
+        self.run_tmux(&["new-window", "-t", session, "-n", name])?;
+        Ok(())
+    }
+
+    fn split_window(&self, session: &str, window: &str) -> Result<()> {
+        let target = format!("{}:{}", session, window);
+        self.run_tmux(&["split-window", "-t", &target])?;
+        Ok(())
+    }
+
+    fn send_keys(&self, target: &str, keys: &str) -> Result<()> {
+        self.run_tmux(&["send-keys", "-t", target, keys, "Enter"])?;
+        Ok(())
+    }
+
+    fn select_layout(&self, target: &str, layout: &str) -> Result<()> {
+        self.run_tmux(&["select-layout", "-t", target, layout])?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
