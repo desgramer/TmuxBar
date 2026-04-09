@@ -9,6 +9,7 @@ use crate::core::event_logger::EventLogger;
 use crate::core::fd_alert_policy::FdAlertPolicy;
 use crate::core::inactivity_detector::InactivityDetector;
 use crate::core::monitor_service::MonitorService;
+use crate::core::restart_service::RestartService;
 use crate::core::session_manager::SessionManager;
 use crate::core::snapshot_service::SnapshotService;
 use crate::infra::config::AppConfig;
@@ -54,6 +55,7 @@ struct BackgroundServices {
     monitor_service: MonitorService,
     monitor_rx: broadcast::Receiver<MonitorEvent>,
     session_manager: SessionManager,
+    restart_service: Option<RestartService>,
     event_services: EventServices,
     cmd_rx: mpsc::Receiver<AppCommand>,
     shared_state: Arc<Mutex<AppState>>,
@@ -133,13 +135,36 @@ pub fn run() {
     let notification_service = NotificationService::new();
 
     let snapshot_dir = PathBuf::from(&config.snapshots.dir);
-    let _snapshot_service = match SnapshotService::new(Arc::clone(&tmux), snapshot_dir) {
-        Ok(svc) => Some(svc),
-        Err(e) => {
-            tracing::error!("Failed to create SnapshotService: {e:#}");
-            None
-        }
-    };
+    let snapshot_service_opt: Option<Arc<SnapshotService>> =
+        match SnapshotService::new(Arc::clone(&tmux), snapshot_dir) {
+            Ok(svc) => Some(Arc::new(svc)),
+            Err(e) => {
+                tracing::error!("Failed to create SnapshotService: {e:#}");
+                None
+            }
+        };
+
+    // RestartService uses its own EventLogger and NotificationService instances
+    // (LogStore / rusqlite::Connection is not Sync so cannot be shared via Arc
+    // across threads; opening a second connection to the same WAL-mode DB file
+    // is safe and is the standard SQLite multi-writer approach).
+    let restart_service = snapshot_service_opt.map(|ss| {
+        // EventLogger wraps rusqlite::Connection which is Send but not Sync;
+        // RestartService owns it inside a Mutex so the overall type is Send.
+        // We open a second connection to the same WAL-mode DB file — this is
+        // the standard SQLite multi-reader approach.
+        let restart_log_store = match LogStore::new(&LogStore::default_path()) {
+            Ok(s) => s,
+            Err(_) => LogStore::new(std::path::Path::new(":memory:"))
+                .expect("in-memory LogStore should never fail"),
+        };
+        RestartService::new(
+            ss,
+            Arc::clone(&tmux),
+            EventLogger::new(restart_log_store),
+            NotificationService::new(),
+        )
+    });
 
     // ------------------------------------------------------------------
     // d. Set up command channel (UI -> Tokio)
@@ -158,6 +183,7 @@ pub fn run() {
         monitor_service,
         monitor_rx,
         session_manager,
+        restart_service,
         event_services: EventServices {
             fd_alert_policy,
             inactivity_detector,
@@ -253,6 +279,7 @@ async fn run_background(services: BackgroundServices) {
         monitor_service,
         monitor_rx,
         session_manager,
+        restart_service,
         event_services,
         mut cmd_rx,
         shared_state,
@@ -296,8 +323,16 @@ async fn run_background(services: BackgroundServices) {
                 }
             }
             AppCommand::RestartServer => {
-                // Will be implemented in Task 16 (safe restart flow).
-                tracing::info!("RestartServer not yet implemented");
+                match &restart_service {
+                    Some(svc) => {
+                        if let Err(e) = svc.execute_restart() {
+                            tracing::error!("Safe restart failed: {e:#}");
+                        }
+                    }
+                    None => {
+                        tracing::warn!("RestartServer: SnapshotService unavailable, skipping restart");
+                    }
+                }
             }
             AppCommand::Quit => {
                 tracing::info!("Quit command received, shutting down");
