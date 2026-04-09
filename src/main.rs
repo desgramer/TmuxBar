@@ -7,5 +7,8 @@ mod models;
 mod ui;
 
 fn main() {
+    // Initialize tracing subscriber for structured logging.
+    tracing_subscriber::fmt::init();
+
     app::run();
 }
