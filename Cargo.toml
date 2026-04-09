@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSThread", "NSString", "NSArray"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSImage", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3", features = ["NSThread", "NSString", "NSArray", "NSDictionary", "NSObject", "NSAttributedString"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSImage", "NSRunningApplication", "NSButton", "NSControl", "NSResponder", "NSStatusBarButton", "NSView", "NSColor", "NSAttributedString"] }
 dispatch2 = "0.3"
 block2 = "0.6"
 tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }
