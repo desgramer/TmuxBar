@@ -62,6 +62,42 @@ fn colored_string(text: &str, color: &NSColor) -> Retained<NSAttributedString> {
 }
 
 // ---------------------------------------------------------------------------
+// Standalone helpers (accessible from app.rs)
+// ---------------------------------------------------------------------------
+
+/// Apply an alert-level change to a raw `NSStatusItem` pointer.
+///
+/// # Safety
+///
+/// `raw_ptr` must be a valid pointer to an `NSStatusItem` that is still alive.
+/// This function **must** be called on the main thread (the caller must hold a
+/// `MainThreadMarker`).
+pub(crate) unsafe fn apply_alert_level_raw(
+    raw_ptr: *const NSStatusItem,
+    level: &AlertLevel,
+    mtm: MainThreadMarker,
+) {
+    let item = unsafe { &*raw_ptr };
+    let icon = icon_for_level(level);
+    let color = color_for_level(level);
+    let attributed = colored_string(icon, &color);
+    if let Some(button) = item.button(mtm) {
+        button.setAttributedTitle(&attributed);
+    }
+}
+
+/// Rebuild and attach a session menu to a raw `NSStatusItem` pointer.
+///
+/// # Safety
+///
+/// `raw_ptr` must be a valid pointer to an `NSStatusItem` that is still alive.
+/// This function **must** be called on the main thread.
+pub(crate) unsafe fn set_menu_raw(raw_ptr: *const NSStatusItem, menu: &NSMenu) {
+    let item = unsafe { &*raw_ptr };
+    item.setMenu(Some(menu));
+}
+
+// ---------------------------------------------------------------------------
 // MenuBarApp
 // ---------------------------------------------------------------------------
 

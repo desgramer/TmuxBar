@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSStatusItem};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::core::event_logger::EventLogger;
@@ -20,13 +21,46 @@ use crate::infra::log_store::LogStore;
 use crate::infra::sys_probe::MacSysProbe;
 use crate::infra::tmux_client::TmuxClient;
 use crate::models::{AlertLevel, AppCommand, MonitorEvent, Session};
-use crate::ui::menu_bar::MenuBarApp;
+use crate::ui::menu_bar::{self, MenuBarApp};
 use crate::ui::notifications::NotificationService;
 use crate::ui::session_menu::SessionMenuBuilder;
 
 // ---------------------------------------------------------------------------
 // Shared application state (Tokio side writes, main-thread reads)
 // ---------------------------------------------------------------------------
+
+/// Wrapper around a raw pointer to `NSStatusItem` so it can live inside
+/// `Arc<Mutex<AppState>>`.
+///
+/// # Safety
+///
+/// The pointee is kept alive by the `Retained<NSStatusItem>` held in
+/// `MenuBarApp` on the main thread, which lives until `NSApplication::run()`
+/// returns. All dereferences of this pointer happen inside
+/// `DispatchQueue::main().exec_async()` closures that are guaranteed to run on
+/// the main thread.
+#[derive(Clone, Copy)]
+struct StatusItemPtr {
+    ptr: *const NSStatusItem,
+}
+
+impl StatusItemPtr {
+    fn new(item: &NSStatusItem) -> Self {
+        Self {
+            ptr: item as *const NSStatusItem,
+        }
+    }
+
+    /// Return the raw pointer. Must only be dereferenced on the main thread.
+    fn as_ptr(self) -> *const NSStatusItem {
+        self.ptr
+    }
+}
+
+// SAFETY: We never dereference the pointer off the main thread. The raw
+// pointer is only read inside GCD main-queue dispatches.
+unsafe impl Send for StatusItemPtr {}
+unsafe impl Sync for StatusItemPtr {}
 
 /// State shared between the Tokio background thread and the AppKit main thread.
 ///
@@ -37,6 +71,9 @@ struct AppState {
     sessions: Vec<Session>,
     alert_level: AlertLevel,
     fd_percent: u8,
+    /// Raw pointer to the `NSStatusItem` for icon/menu updates dispatched to
+    /// the main thread. `None` until the UI is initialised.
+    status_item_ptr: Option<StatusItemPtr>,
 }
 
 impl Default for AppState {
@@ -45,6 +82,7 @@ impl Default for AppState {
             sessions: Vec::new(),
             alert_level: AlertLevel::Normal,
             fd_percent: 0,
+            status_item_ptr: None,
         }
     }
 }
@@ -77,6 +115,12 @@ struct EventServices {
     /// `None` when the log store failed to open; fd spikes are silently dropped.
     event_logger: Option<EventLogger>,
     notification_service: NotificationService,
+    /// Last fd_percent value that was logged, used to avoid logging the same
+    /// percentage every tick while the value stays above the threshold.
+    last_logged_fd_pct: Option<u8>,
+    /// Session names for which an inactivity notification has already been
+    /// sent. Cleared when the session becomes active again.
+    notified_inactive_sessions: HashSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +310,8 @@ pub fn run() {
             inactivity_detector: Arc::clone(&inactivity_detector),
             event_logger,
             notification_service,
+            last_logged_fd_pct: None,
+            notified_inactive_sessions: HashSet::new(),
         },
         cmd_rx,
         shared_state: Arc::clone(&shared_state),
@@ -328,6 +374,14 @@ pub fn run() {
 
     let menu_bar = MenuBarApp::new(mtm);
 
+    // Store a raw pointer to the NSStatusItem so background threads can
+    // dispatch UI updates via GCD. The Retained<NSStatusItem> inside
+    // menu_bar keeps the object alive for the lifetime of the run loop.
+    {
+        let mut state = shared_state.lock().unwrap();
+        state.status_item_ptr = Some(StatusItemPtr::new(menu_bar.status_item()));
+    }
+
     // Build the initial menu from whatever sessions exist right now.
     {
         let state = shared_state.lock().unwrap();
@@ -352,20 +406,22 @@ pub fn run() {
             let state = ui_state.lock().unwrap();
             let alert_level = state.alert_level.clone();
             let sessions = state.sessions.clone();
+            let ptr_opt = state.status_item_ptr;
             drop(state);
 
-            dispatch2::DispatchQueue::main().exec_async(move || {
-                if let Some(mtm) = MainThreadMarker::new() {
-                    // Rebuild the menu with latest session data.
-                    // Note: without a retained reference to MenuBarApp we cannot
-                    // update its menu directly. The current approach relies on the
-                    // menu being rebuilt via setup_menu_refresh_timer at init time
-                    // and the icon colour being set via the monitor event dispatch.
-                    let _app = NSApplication::sharedApplication(mtm);
-                    let _ = alert_level;
-                    let _ = sessions;
-                }
-            });
+            if let Some(sip) = ptr_opt {
+                dispatch2::DispatchQueue::main().exec_async(move || {
+                    if let Some(mtm) = MainThreadMarker::new() {
+                        // SAFETY: sip.as_ptr() is valid for the lifetime of the
+                        // NSApplication run loop and we are on the main thread.
+                        unsafe {
+                            menu_bar::apply_alert_level_raw(sip.as_ptr(), &alert_level, mtm);
+                            let menu = SessionMenuBuilder::build_menu(mtm, &sessions);
+                            menu_bar::set_menu_raw(sip.as_ptr(), &menu);
+                        }
+                    }
+                });
+            }
         }
     });
 
@@ -563,44 +619,71 @@ fn handle_monitor_event(
     }
 
     // 3. Dispatch icon-colour update to main thread
-    let level_for_dispatch = alert_level;
-    dispatch2::DispatchQueue::main().exec_async(move || {
-        // The icon colour will be updated on next menu rebuild.
-        // A future improvement would store a retained reference to MenuBarApp
-        // in a thread-safe wrapper and call set_alert_level here.
-        let _ = level_for_dispatch;
-    });
+    {
+        let state = shared_state.lock().unwrap();
+        if let Some(ptr) = state.status_item_ptr {
+            let level = state.alert_level.clone();
+            drop(state);
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                if let Some(mtm) = MainThreadMarker::new() {
+                    // SAFETY: ptr is valid for the lifetime of the NSApplication
+                    // run loop and we are on the main thread.
+                    unsafe {
+                        menu_bar::apply_alert_level_raw(ptr.as_ptr(), &level, mtm);
+                    }
+                }
+            });
+        }
+    }
 
-    // 4. Check inactivity
+    // 4. Check inactivity — only notify once per session until it becomes active again.
     let now = chrono::Utc::now().timestamp();
     let idle_sessions = {
         let detector = services.inactivity_detector.lock().unwrap();
         detector.check_inactive(&event.sessions, now)
     };
     for session_name in &idle_sessions {
-        let mins = (now
-            - event
-                .sessions
-                .iter()
-                .find(|s| s.name == *session_name)
-                .map(|s| s.last_activity)
-                .unwrap_or(now))
-            / 60;
-        if let Err(e) = services
-            .notification_service
-            .send_inactivity_alert(session_name, mins.max(0) as u64)
+        // Only send the notification the first time a session is detected as idle.
+        if services
+            .notified_inactive_sessions
+            .insert(session_name.clone())
         {
-            tracing::warn!("Failed to send inactivity alert for '{session_name}': {e:#}");
-        }
-    }
-
-    // 5. Log fd spike if above warning threshold (skipped if no log store)
-    if event.fd_percent >= 85 {
-        if let Some(ref mut logger) = services.event_logger {
-            if let Err(e) = logger.log_fd_spike(event.fd_percent) {
-                tracing::warn!("Failed to log fd spike: {e:#}");
+            let mins = (now
+                - event
+                    .sessions
+                    .iter()
+                    .find(|s| s.name == *session_name)
+                    .map(|s| s.last_activity)
+                    .unwrap_or(now))
+                / 60;
+            if let Err(e) = services
+                .notification_service
+                .send_inactivity_alert(session_name, mins.max(0) as u64)
+            {
+                tracing::warn!("Failed to send inactivity alert for '{session_name}': {e:#}");
             }
         }
+    }
+    // Clear sessions that are no longer idle so we re-notify if they go idle again.
+    services
+        .notified_inactive_sessions
+        .retain(|name| idle_sessions.contains(name));
+
+    // 5. Log fd spike if above warning threshold — only when the percentage
+    //    changes, to avoid writing thousands of duplicate rows.
+    if event.fd_percent >= 85 {
+        let should_log = services.last_logged_fd_pct != Some(event.fd_percent);
+        if should_log {
+            services.last_logged_fd_pct = Some(event.fd_percent);
+            if let Some(ref mut logger) = services.event_logger {
+                if let Err(e) = logger.log_fd_spike(event.fd_percent) {
+                    tracing::warn!("Failed to log fd spike: {e:#}");
+                }
+            }
+        }
+    } else {
+        // Reset so the next rise above the threshold is logged.
+        services.last_logged_fd_pct = None;
     }
 }
 
