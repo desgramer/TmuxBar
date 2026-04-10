@@ -1,10 +1,10 @@
 use objc2::rc::Retained;
-use objc2::{AnyThread, MainThreadMarker};
+use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSColor, NSForegroundColorAttributeName, NSMenu, NSStatusBar, NSStatusItem,
+    NSColor, NSImage, NSImageSymbolConfiguration, NSMenu, NSStatusBar, NSStatusItem,
     NSVariableStatusItemLength,
 };
-use objc2_foundation::{NSAttributedString, NSDictionary, NSString};
+use objc2_foundation::NSString;
 
 use crate::models::AlertLevel;
 
@@ -16,48 +16,41 @@ pub struct MenuBarApp {
 }
 
 // ---------------------------------------------------------------------------
-// Icon glyphs per alert level
+// Icon image per alert level
 // ---------------------------------------------------------------------------
 
-fn icon_for_level(level: &AlertLevel) -> &'static str {
+fn image_for_level(level: &AlertLevel) -> Retained<NSImage> {
+    let symbol_name = match level {
+        AlertLevel::Normal => "terminal",
+        AlertLevel::Warning | AlertLevel::Elevated => "exclamationmark.triangle.fill",
+        AlertLevel::Critical => "xmark.octagon.fill",
+    };
+    let ns_str = NSString::from_str(symbol_name);
+    let empty = NSString::from_str("");
+
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(&ns_str, Some(&empty))
+        .expect("Invalid SF Symbol name");
+
     match level {
-        AlertLevel::Normal => "\u{25CF}",   // ●
-        AlertLevel::Warning => "\u{26A0}",  // ⚠
-        AlertLevel::Elevated => "\u{26A0}", // ⚠ (same glyph, different colour)
-        AlertLevel::Critical => "\u{26D4}", // ⛔
-    }
-}
+        AlertLevel::Normal => {
+            image.setTemplate(true);
+            image
+        }
+        _ => {
+            let color = match level {
+                AlertLevel::Warning | AlertLevel::Elevated => NSColor::systemYellowColor(),
+                AlertLevel::Critical => NSColor::systemRedColor(),
+                _ => unreachable!(),
+            };
 
-fn color_for_level(level: &AlertLevel) -> Retained<NSColor> {
-    match level {
-        AlertLevel::Normal => NSColor::systemGreenColor(),
-        AlertLevel::Warning => NSColor::systemYellowColor(),
-        AlertLevel::Elevated => NSColor::systemYellowColor(),
-        AlertLevel::Critical => NSColor::systemRedColor(),
-    }
-}
+            let config = NSImageSymbolConfiguration::configurationWithHierarchicalColor(&color);
+            let image_with_config = image
+                .imageWithSymbolConfiguration(&config)
+                .unwrap_or(image.clone());
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Build an `NSAttributedString` with the given text and foreground colour.
-fn colored_string(text: &str, color: &NSColor) -> Retained<NSAttributedString> {
-    let ns_text = NSString::from_str(text);
-
-    // Build a single-entry attributes dictionary: { NSForegroundColorAttributeName: color }
-    let key: &NSString = unsafe { NSForegroundColorAttributeName };
-    let attrs: Retained<NSDictionary<NSString, objc2::runtime::AnyObject>> =
-        NSDictionary::from_slices(&[key], &[color]);
-
-    // SAFETY: the attribute dictionary contains a valid NSForegroundColorAttributeName -> NSColor
-    // mapping, which is the expected type for this key.
-    unsafe {
-        NSAttributedString::initWithString_attributes(
-            NSAttributedString::alloc(),
-            &ns_text,
-            Some(&attrs),
-        )
+            image_with_config.setTemplate(false);
+            image_with_config
+        }
     }
 }
 
@@ -78,11 +71,10 @@ pub(crate) unsafe fn apply_alert_level_raw(
     mtm: MainThreadMarker,
 ) {
     let item = unsafe { &*raw_ptr };
-    let icon = icon_for_level(level);
-    let color = color_for_level(level);
-    let attributed = colored_string(icon, &color);
+    let image = image_for_level(level);
     if let Some(button) = item.button(mtm) {
-        button.setAttributedTitle(&attributed);
+        button.setImage(Some(&image));
+        button.setTitle(&NSString::from_str(""));
     }
 }
 
@@ -114,12 +106,11 @@ impl MenuBarApp {
 
     /// Update the icon/colour to reflect the current alert level.
     pub fn set_alert_level(&self, level: &AlertLevel, mtm: MainThreadMarker) {
-        let icon = icon_for_level(level);
-        let color = color_for_level(level);
-        let attributed = colored_string(icon, &color);
+        let image = image_for_level(level);
 
         if let Some(button) = self.status_item.button(mtm) {
-            button.setAttributedTitle(&attributed);
+            button.setImage(Some(&image));
+            button.setTitle(&NSString::from_str(""));
         }
     }
 
@@ -148,16 +139,6 @@ mod tests {
         // NSStatusItem is *not* Send -- this is expected for AppKit objects.
         // We just verify the struct definition compiles.
         let _ = std::mem::size_of::<MenuBarApp>();
-    }
-
-    /// Verifies that helper functions return sensible values without needing
-    /// a running NSApplication.
-    #[test]
-    fn icon_mapping() {
-        assert_eq!(icon_for_level(&AlertLevel::Normal), "\u{25CF}");
-        assert_eq!(icon_for_level(&AlertLevel::Warning), "\u{26A0}");
-        assert_eq!(icon_for_level(&AlertLevel::Elevated), "\u{26A0}");
-        assert_eq!(icon_for_level(&AlertLevel::Critical), "\u{26D4}");
     }
 
     /// Integration test that requires the main thread and a running

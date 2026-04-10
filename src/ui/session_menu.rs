@@ -1,7 +1,7 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSMenu, NSMenuItem};
+use objc2_app_kit::{NSImage, NSMenu, NSMenuItem};
 use objc2_foundation::NSString;
 
 use crate::i18n::{self, Language};
@@ -59,7 +59,7 @@ impl SessionMenuBuilder {
         for (idx, session) in sessions.iter().enumerate() {
             let title = format_session_title(session);
             // Parent item is clickable (attach action via tag 0..999).
-            let session_item = make_item(mtm, &title, handler);
+            let session_item = make_item(mtm, &title, Some("terminal"), handler);
             session_item.setTag(idx as isize);
             session_item.setEnabled(true);
 
@@ -67,11 +67,11 @@ impl SessionMenuBuilder {
             let submenu =
                 NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(&session.name));
 
-            let rename_item = make_item(mtm, i18n::menu_rename(lang), handler);
+            let rename_item = make_item(mtm, i18n::menu_rename(lang), Some("pencil"), handler);
             rename_item.setTag(TAG_RENAME_SESSION_BASE + idx as isize);
             submenu.addItem(&rename_item);
 
-            let kill_item = make_item(mtm, i18n::menu_kill_session(lang), handler);
+            let kill_item = make_item(mtm, i18n::menu_kill_session(lang), Some("trash"), handler);
             kill_item.setTag(TAG_KILL_SESSION_BASE + idx as isize);
             submenu.addItem(&kill_item);
 
@@ -85,21 +85,31 @@ impl SessionMenuBuilder {
         }
 
         // --- Fixed action items ---
-        let new_session = make_item(mtm, i18n::menu_new_session(lang), handler);
+        let new_session = make_item(
+            mtm,
+            i18n::menu_new_session(lang),
+            Some("plus.square"),
+            handler,
+        );
         new_session.setTag(TAG_NEW_SESSION);
         menu.addItem(&new_session);
 
-        let kill_server = make_item(mtm, i18n::menu_kill_server(lang), handler);
+        let kill_server = make_item(mtm, i18n::menu_kill_server(lang), Some("power"), handler);
         kill_server.setTag(TAG_KILL_SERVER);
         menu.addItem(&kill_server);
 
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-        let settings = make_item(mtm, i18n::menu_settings(lang), handler);
+        let settings = make_item(mtm, i18n::menu_settings(lang), Some("gearshape"), handler);
         settings.setTag(TAG_SETTINGS);
         menu.addItem(&settings);
 
-        let quit = make_item(mtm, i18n::menu_quit(lang), handler);
+        let quit = make_item(
+            mtm,
+            i18n::menu_quit(lang),
+            Some("arrow.right.circle"),
+            handler,
+        );
         quit.setTag(TAG_QUIT);
         menu.addItem(&quit);
 
@@ -170,6 +180,7 @@ fn format_memory(bytes: u64) -> String {
 fn make_item(
     mtm: MainThreadMarker,
     title: &str,
+    icon_name: Option<&str>,
     handler: Option<&MenuActionHandler>,
 ) -> Retained<NSMenuItem> {
     let ns_title = NSString::from_str(title);
@@ -185,6 +196,15 @@ fn make_item(
             &empty,
         )
     };
+
+    if let Some(name) = icon_name {
+        let ns_icon_name = NSString::from_str(name);
+        if let Some(image) =
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(&ns_icon_name, Some(&empty))
+        {
+            item.setImage(Some(&image));
+        }
+    }
 
     if let Some(h) = handler {
         let target: &AnyObject = h;
