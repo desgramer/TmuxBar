@@ -100,6 +100,7 @@ struct AppState {
     sessions: Vec<Session>,
     alert_level: AlertLevel,
     fd_percent: u8,
+    language: Language,
     /// Raw pointer to the `NSStatusItem` for icon/menu updates dispatched to
     /// the main thread. `None` until the UI is initialised.
     status_item_ptr: Option<StatusItemPtr>,
@@ -114,6 +115,7 @@ impl Default for AppState {
             sessions: Vec::new(),
             alert_level: AlertLevel::Normal,
             fd_percent: 0,
+            language: Language::default(),
             status_item_ptr: None,
             action_handler_ptr: None,
         }
@@ -356,6 +358,13 @@ pub fn run() {
     // ------------------------------------------------------------------
     let shared_state = Arc::new(Mutex::new(AppState::default()));
 
+    // Initialise language from config and store in shared state.
+    let language = Language::from_code(&config.general.language);
+    {
+        let mut state = shared_state.lock().unwrap();
+        state.language = language;
+    }
+
     // ------------------------------------------------------------------
     // f. Spawn Tokio runtime on background thread
     // ------------------------------------------------------------------
@@ -391,10 +400,18 @@ pub fn run() {
     // ------------------------------------------------------------------
     let watcher_fd_policy = Arc::clone(&fd_alert_policy);
     let watcher_inactivity = Arc::clone(&inactivity_detector);
+    let watcher_state = Arc::clone(&shared_state);
     let _config_watcher = match ConfigWatcher::start(
         AppConfig::config_path(),
         move |new_cfg: AppConfig| {
             tracing::info!("Config reloaded");
+
+            // Update language in shared state.
+            let new_lang = Language::from_code(&new_cfg.general.language);
+            match watcher_state.lock() {
+                Ok(mut state) => state.language = new_lang,
+                Err(e) => tracing::error!("AppState mutex poisoned on config reload: {e}"),
+            }
 
             // Update FdAlertPolicy thresholds and reset state.
             match watcher_fd_policy.lock() {
@@ -450,7 +467,7 @@ pub fn run() {
     let menu_bar = MenuBarApp::new(mtm);
 
     // Create the menu action handler that routes NSMenuItem clicks to AppCommands.
-    let action_handler = MenuActionHandler::new(mtm, cmd_tx.clone());
+    let action_handler = MenuActionHandler::new(mtm, cmd_tx.clone(), language);
 
     // Store raw pointers so background threads can dispatch UI updates via GCD.
     // The Retained values on the main thread keep the objects alive for the
@@ -464,7 +481,7 @@ pub fn run() {
     // Build the initial menu from whatever sessions exist right now.
     {
         let state = shared_state.lock().unwrap();
-        let menu = SessionMenuBuilder::build_menu(mtm, &state.sessions, Some(&action_handler));
+        let menu = SessionMenuBuilder::build_menu(mtm, &state.sessions, Some(&action_handler), &state.language);
         menu_bar.set_menu(&menu);
     }
 
@@ -489,6 +506,7 @@ pub fn run() {
             let state = ui_state.lock().unwrap();
             let alert_level = state.alert_level.clone();
             let sessions = state.sessions.clone();
+            let language = state.language;
             let ptr_opt = state.status_item_ptr;
             let handler_opt = state.action_handler_ptr;
             drop(state);
@@ -503,7 +521,7 @@ pub fn run() {
                             let handler_ref =
                                 handler_opt.map(|ahp| &*ahp.as_ptr());
                             let menu =
-                                SessionMenuBuilder::build_menu(mtm, &sessions, handler_ref);
+                                SessionMenuBuilder::build_menu(mtm, &sessions, handler_ref, &language);
                             menu_bar::set_menu_raw(sip.as_ptr(), &menu);
                         }
                     }
@@ -619,10 +637,14 @@ async fn run_background(services: BackgroundServices) {
                 match &restart_service {
                     Some(svc) => {
                         let svc = Arc::clone(svc);
+                        let lang = {
+                            let state = shared_state.lock().unwrap();
+                            state.language
+                        };
                         // Run on a blocking thread so std::thread::sleep inside
                         // execute_restart() does not block the Tokio runtime.
                         let result = tokio::task::spawn_blocking(move || {
-                            svc.execute_restart(&Language::En)
+                            svc.execute_restart(&lang)
                         }).await;
                         match result {
                             Ok(Err(e)) => tracing::error!("Safe restart failed: {e:#}"),
@@ -636,7 +658,18 @@ async fn run_background(services: BackgroundServices) {
                 }
             }
             AppCommand::OpenSettings => {
-                tracing::info!("OpenSettings command received (not yet implemented)");
+                let config_path = AppConfig::config_path();
+                match std::process::Command::new("open").arg(&config_path).status() {
+                    Ok(s) if s.success() => {
+                        tracing::info!("Opened config file: {}", config_path.display());
+                    }
+                    Ok(s) => {
+                        tracing::error!("Failed to open config file: exit {s}");
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open config file: {e}");
+                    }
+                }
             }
             AppCommand::Quit => {
                 tracing::info!("Quit command received, shutting down");
@@ -689,6 +722,11 @@ fn handle_monitor_event(
     services: &mut EventServices,
     shared_state: &Arc<Mutex<AppState>>,
 ) {
+    let language = {
+        let state = shared_state.lock().unwrap();
+        state.language
+    };
+
     // 1. Evaluate fd alert policy (lock only for the duration of the call).
     let fd_alert_opt = {
         let mut policy = match services.fd_alert_policy.lock() {
@@ -703,7 +741,7 @@ fn handle_monitor_event(
     if let Some(level) = fd_alert_opt {
         if let Err(e) = services
             .notification_service
-            .send_fd_alert(event.fd_percent, &level, &Language::En)
+            .send_fd_alert(event.fd_percent, &level, &language)
         {
             tracing::warn!("Failed to send fd alert notification: {e:#}");
         }
@@ -786,7 +824,7 @@ fn handle_monitor_event(
                 / 60;
             if let Err(e) = services
                 .notification_service
-                .send_inactivity_alert(session_name, mins.max(0) as u64, &Language::En)
+                .send_inactivity_alert(session_name, mins.max(0) as u64, &language)
             {
                 tracing::warn!("Failed to send inactivity alert for '{session_name}': {e:#}");
             }
@@ -828,6 +866,7 @@ fn setup_initial_menu(
     config: &AppConfig,
     mtm: MainThreadMarker,
 ) {
+    let language = Language::from_code(&config.general.language);
     let tmux = TmuxClient::new(&config.terminal.tmux_path);
     let session_mgr = SessionManager::new(
         Arc::new(tmux) as Arc<dyn crate::models::TmuxAdapter>,
@@ -836,12 +875,12 @@ fn setup_initial_menu(
     );
     match session_mgr.list_sessions() {
         Ok(sessions) => {
-            let menu = SessionMenuBuilder::build_menu(mtm, &sessions, Some(handler));
+            let menu = SessionMenuBuilder::build_menu(mtm, &sessions, Some(handler), &language);
             menu_bar.set_menu(&menu);
         }
         Err(e) => {
             tracing::warn!("Failed to list sessions for initial menu: {e:#}");
-            let menu = SessionMenuBuilder::build_menu(mtm, &[], Some(handler));
+            let menu = SessionMenuBuilder::build_menu(mtm, &[], Some(handler), &language);
             menu_bar.set_menu(&menu);
         }
     }
