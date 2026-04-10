@@ -55,17 +55,21 @@ impl SessionMenuBuilder {
             h.update_session_names(sessions.iter().map(|s| s.name.clone()).collect());
         }
 
-        // --- Session items: click to attach, submenu for rename/kill ---
+        // --- Session items: submenu with Attach / Rename / Kill ---
         for (idx, session) in sessions.iter().enumerate() {
             let title = format_session_title(session);
-            // Parent item is clickable (attach action via tag 0..999).
-            let session_item = make_item(mtm, &title, Some("terminal"), handler);
-            session_item.setTag(idx as isize);
+            // Parent item has no action — submenu handles everything.
+            let session_item = make_item(mtm, &title, Some("terminal"), None);
             session_item.setEnabled(true);
 
-            // Submenu for destructive / edit actions only.
             let submenu =
                 NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(&session.name));
+
+            let attach_item = make_item(mtm, i18n::menu_attach(lang), Some("play.fill"), handler);
+            attach_item.setTag(idx as isize);
+            submenu.addItem(&attach_item);
+
+            submenu.addItem(&NSMenuItem::separatorItem(mtm));
 
             let rename_item = make_item(mtm, i18n::menu_rename(lang), Some("pencil"), handler);
             rename_item.setTag(TAG_RENAME_SESSION_BASE + idx as isize);
