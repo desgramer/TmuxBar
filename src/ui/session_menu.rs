@@ -4,6 +4,7 @@ use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSMenu, NSMenuItem};
 use objc2_foundation::NSString;
 
+use crate::i18n::{self, Language};
 use crate::models::{Session, SessionStats};
 use crate::ui::menu_action_handler::MenuActionHandler;
 
@@ -16,6 +17,8 @@ pub const TAG_NEW_SESSION: isize = 1000;
 pub const TAG_KILL_SERVER: isize = 1001;
 pub const TAG_SETTINGS: isize = 1002;
 pub const TAG_QUIT: isize = 1003;
+/// Tags 2000..2999 are reserved for session kill items.
+pub const TAG_KILL_SESSION_BASE: isize = 2000;
 
 // ---------------------------------------------------------------------------
 // SessionMenuBuilder
@@ -41,6 +44,7 @@ impl SessionMenuBuilder {
         mtm: MainThreadMarker,
         sessions: &[Session],
         handler: Option<&MenuActionHandler>,
+        lang: &Language,
     ) -> Retained<NSMenu> {
         let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("TmuxBar"));
 
@@ -49,13 +53,37 @@ impl SessionMenuBuilder {
             h.update_session_names(sessions.iter().map(|s| s.name.clone()).collect());
         }
 
-        // --- Session items ---
+        // --- Session items (each with submenu: Attach / Kill) ---
         for (idx, session) in sessions.iter().enumerate() {
             let title = format_session_title(session);
-            let item = make_item(mtm, &title, handler);
-            item.setTag(idx as isize);
-            item.setEnabled(true);
-            menu.addItem(&item);
+            let session_item = {
+                let ns_title = NSString::from_str(&title);
+                let empty = NSString::from_str("");
+                unsafe {
+                    NSMenuItem::initWithTitle_action_keyEquivalent(
+                        NSMenuItem::alloc(mtm),
+                        &ns_title,
+                        None,
+                        &empty,
+                    )
+                }
+            };
+
+            let submenu = NSMenu::initWithTitle(
+                NSMenu::alloc(mtm),
+                &NSString::from_str(&session.name),
+            );
+
+            let attach_item = make_item(mtm, i18n::menu_attach(lang), handler);
+            attach_item.setTag(idx as isize);
+            submenu.addItem(&attach_item);
+
+            let kill_item = make_item(mtm, i18n::menu_kill_session(lang), handler);
+            kill_item.setTag(TAG_KILL_SESSION_BASE + idx as isize);
+            submenu.addItem(&kill_item);
+
+            session_item.setSubmenu(Some(&submenu));
+            menu.addItem(&session_item);
         }
 
         // --- Separator after sessions (only if there are sessions) ---
@@ -64,21 +92,21 @@ impl SessionMenuBuilder {
         }
 
         // --- Fixed action items ---
-        let new_session = make_item(mtm, "New Session...", handler);
+        let new_session = make_item(mtm, i18n::menu_new_session(lang), handler);
         new_session.setTag(TAG_NEW_SESSION);
         menu.addItem(&new_session);
 
-        let kill_server = make_item(mtm, "Kill Server", handler);
+        let kill_server = make_item(mtm, i18n::menu_kill_server(lang), handler);
         kill_server.setTag(TAG_KILL_SERVER);
         menu.addItem(&kill_server);
 
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-        let settings = make_item(mtm, "Settings", handler);
+        let settings = make_item(mtm, i18n::menu_settings(lang), handler);
         settings.setTag(TAG_SETTINGS);
         menu.addItem(&settings);
 
-        let quit = make_item(mtm, "Quit", handler);
+        let quit = make_item(mtm, i18n::menu_quit(lang), handler);
         quit.setTag(TAG_QUIT);
         menu.addItem(&quit);
 
@@ -300,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_tag_constants_are_distinct() {
-        let tags = [TAG_NEW_SESSION, TAG_KILL_SERVER, TAG_SETTINGS, TAG_QUIT];
+        let tags = [TAG_NEW_SESSION, TAG_KILL_SERVER, TAG_SETTINGS, TAG_QUIT, TAG_KILL_SESSION_BASE];
         for (i, a) in tags.iter().enumerate() {
             for (j, b) in tags.iter().enumerate() {
                 if i != j {
@@ -317,5 +345,11 @@ mod tests {
         assert!(TAG_KILL_SERVER >= 1000);
         assert!(TAG_SETTINGS >= 1000);
         assert!(TAG_QUIT >= 1000);
+    }
+
+    #[test]
+    fn test_kill_session_tag_range_does_not_overlap() {
+        assert!(TAG_KILL_SESSION_BASE >= 2000);
+        assert!(TAG_NEW_SESSION < TAG_KILL_SESSION_BASE);
     }
 }
