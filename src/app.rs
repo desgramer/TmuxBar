@@ -20,6 +20,7 @@ use crate::infra::launch_agent::LaunchAgent;
 use crate::infra::log_store::LogStore;
 use crate::infra::sys_probe::MacSysProbe;
 use crate::infra::tmux_client::TmuxClient;
+use crate::i18n::Language;
 use crate::models::{AlertLevel, AppCommand, MonitorEvent, Session};
 use crate::ui::menu_action_handler::MenuActionHandler;
 use crate::ui::menu_bar::{self, MenuBarApp};
@@ -621,7 +622,7 @@ async fn run_background(services: BackgroundServices) {
                         // Run on a blocking thread so std::thread::sleep inside
                         // execute_restart() does not block the Tokio runtime.
                         let result = tokio::task::spawn_blocking(move || {
-                            svc.execute_restart()
+                            svc.execute_restart(&Language::En)
                         }).await;
                         match result {
                             Ok(Err(e)) => tracing::error!("Safe restart failed: {e:#}"),
@@ -702,7 +703,7 @@ fn handle_monitor_event(
     if let Some(level) = fd_alert_opt {
         if let Err(e) = services
             .notification_service
-            .send_fd_alert(event.fd_percent, &level)
+            .send_fd_alert(event.fd_percent, &level, &Language::En)
         {
             tracing::warn!("Failed to send fd alert notification: {e:#}");
         }
@@ -785,7 +786,7 @@ fn handle_monitor_event(
                 / 60;
             if let Err(e) = services
                 .notification_service
-                .send_inactivity_alert(session_name, mins.max(0) as u64)
+                .send_inactivity_alert(session_name, mins.max(0) as u64, &Language::En)
             {
                 tracing::warn!("Failed to send inactivity alert for '{session_name}': {e:#}");
             }
