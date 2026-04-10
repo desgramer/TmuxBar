@@ -4,6 +4,7 @@ use anyhow::Result;
 
 use crate::core::event_logger::EventLogger;
 use crate::core::snapshot_service::SnapshotService;
+use crate::i18n::Language;
 use crate::models::{RestartPhase, TmuxAdapter};
 use crate::ui::notifications::NotificationService;
 
@@ -56,7 +57,7 @@ impl RestartService {
     ///
     /// Returns `Ok(())` if every phase succeeded, or an error if the snapshot
     /// save failed (the only hard-abort condition).
-    pub fn execute_restart(&self) -> Result<()> {
+    pub fn execute_restart(&self, lang: &Language) -> Result<()> {
         // Helper: log a phase result through the Mutex-guarded EventLogger.
         // Silently skipped when no log store is available.
         let log_phase = |phase: RestartPhase, success: bool| {
@@ -87,7 +88,7 @@ impl RestartService {
                 let detail = format!("Could not save session snapshots: {e:#}");
                 if let Err(notify_err) = self
                     .notification_service
-                    .send_restart_result(false, &detail)
+                    .send_restart_result(false, &detail, lang)
                 {
                     tracing::warn!("Failed to send restart-failed notification: {notify_err:#}");
                 }
@@ -188,7 +189,7 @@ impl RestartService {
 
         if let Err(e) = self
             .notification_service
-            .send_restart_result(overall_success, &details)
+            .send_restart_result(overall_success, &details, lang)
         {
             tracing::warn!("Failed to send restart-result notification: {e:#}");
         }
@@ -204,6 +205,7 @@ impl RestartService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Language;
     use crate::infra::log_store::LogStore;
     use crate::models::{RawPane, RawSession, RawWindow};
     use std::sync::Mutex;
@@ -304,6 +306,12 @@ mod tests {
         fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> { Ok(()) }
         fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> { Ok(()) }
         fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> { Ok(()) }
+        fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
+            Ok("0".to_string())
+        }
+        fn rename_session(&self, _old_name: &str, _new_name: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -343,7 +351,7 @@ mod tests {
         let tmux = Arc::new(MockTmux::new());
         let (svc, _tmp) = make_service(Arc::clone(&tmux));
 
-        let result = svc.execute_restart();
+        let result = svc.execute_restart(&Language::En);
         assert!(result.is_ok(), "execute_restart should succeed: {result:?}");
 
         let log = tmux.call_log();
@@ -384,6 +392,10 @@ mod tests {
             fn split_window(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
             fn send_keys(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
             fn select_layout(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
+            fn get_global_option(&self, _: &str) -> anyhow::Result<String> {
+                Ok("0".to_string())
+            }
+            fn rename_session(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
         }
 
         let tmux: Arc<dyn TmuxAdapter> = Arc::new(FailListSessions);
@@ -405,7 +417,7 @@ mod tests {
             notification_service,
         );
 
-        let result = svc.execute_restart();
+        let result = svc.execute_restart(&Language::En);
         assert!(result.is_err(), "execute_restart should fail when snapshots cannot be saved");
     }
 
@@ -456,7 +468,7 @@ mod tests {
         );
 
         // execute_restart must not return an error even with partial restore
-        let result = svc.execute_restart();
+        let result = svc.execute_restart(&Language::En);
         assert!(
             result.is_ok(),
             "execute_restart should complete (partial restore is non-fatal): {result:?}"
@@ -483,7 +495,7 @@ mod tests {
         let (svc, _tmp) = make_service(Arc::clone(&tmux));
 
         // Should not return Err (only snapshot save failure is a hard abort).
-        let result = svc.execute_restart();
+        let result = svc.execute_restart(&Language::En);
         assert!(
             result.is_ok(),
             "execute_restart should not Err on kill failure: {result:?}"
@@ -522,7 +534,7 @@ mod tests {
         );
 
         // All four phases should complete without error.
-        svc.execute_restart().expect("execute_restart");
+        svc.execute_restart(&Language::En).expect("execute_restart");
 
         let log = tmux.call_log();
         assert!(log.contains(&"kill_server".to_string()), "kill_server must be called");

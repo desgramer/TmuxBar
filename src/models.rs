@@ -22,6 +22,9 @@ pub trait TmuxAdapter: Send + Sync {
     fn split_window(&self, session: &str, window: &str) -> anyhow::Result<()>;
     fn send_keys(&self, target: &str, keys: &str) -> anyhow::Result<()>;
     fn select_layout(&self, target: &str, layout: &str) -> anyhow::Result<()>;
+    /// Query a global tmux option by name (e.g., "base-index").
+    fn get_global_option(&self, name: &str) -> anyhow::Result<String>;
+    fn rename_session(&self, old_name: &str, new_name: &str) -> anyhow::Result<()>;
 }
 
 /// Abstraction over OS-level system metrics.
@@ -204,7 +207,9 @@ pub enum AppCommand {
     CreateSession { name: String },
     AttachSession { name: String },
     KillSession { name: String },
+    RenameSession { old_name: String, new_name: String },
     KillServer,
     RestartServer,
+    OpenSettings,
     Quit,
 }
