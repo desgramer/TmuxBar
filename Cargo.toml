@@ -9,9 +9,10 @@ readme = "README.md"
 
 [dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSThread", "NSString", "NSArray", "NSDictionary", "NSObject", "NSAttributedString", "NSGeometry", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", features = ["NSThread", "NSString", "NSArray", "NSDictionary", "NSObject", "NSAttributedString", "NSGeometry", "NSBundle", "objc2-core-foundation"] }
 objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSImage", "NSRunningApplication", "NSButton", "NSControl", "NSResponder", "NSStatusBarButton", "NSView", "NSColor", "NSAttributedString", "NSAlert", "NSTextField", "NSWindow"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "block2", "bitflags"] }
 dispatch2 = "0.3"
 block2 = "0.6"
 tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }

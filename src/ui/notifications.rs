@@ -1,7 +1,3 @@
-// NOTE: The osascript approach does not support interactive action buttons (e.g., "Restart
-// now"). The "Restart now" functionality is triggered from the menu instead via
-// Kill Server → confirm → safe restart flow.
-
 use anyhow::Result;
 use tracing::warn;
 
@@ -67,17 +63,50 @@ pub(crate) fn format_restart_result_message(
 }
 
 // ---------------------------------------------------------------------------
+// Bundle check — UNUserNotificationCenter requires a full .app bundle structure,
+// not just an embedded Info.plist. Raw binaries fall back to osascript.
+// ---------------------------------------------------------------------------
+
+fn is_app_bundle() -> bool {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
+        .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
 // NotificationService
 // ---------------------------------------------------------------------------
 
-pub struct NotificationService;
+pub struct NotificationService {
+    use_native: bool,
+}
 
 impl NotificationService {
     /// Create a new `NotificationService`.
     ///
-    /// Uses `osascript` for notification dispatch, so no authorization flow is required.
+    /// Uses `UNUserNotificationCenter` if the process has a bundle identifier
+    /// (i.e., running as a .app bundle). Falls back to `osascript` otherwise.
     pub fn new() -> Self {
-        Self
+        let use_native = is_app_bundle();
+        if use_native {
+            Self::request_authorization();
+        }
+        Self { use_native }
+    }
+
+    /// Request notification authorization (fire-and-forget).
+    fn request_authorization() {
+        use block2::RcBlock;
+        use objc2::runtime::Bool;
+        use objc2_foundation::NSError;
+        use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
+
+        let center = UNUserNotificationCenter::currentNotificationCenter();
+        let handler = RcBlock::new(|_granted: Bool, _error: *mut NSError| {});
+        center.requestAuthorizationWithOptions_completionHandler(
+            UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+            &handler,
+        );
     }
 
     /// Send an fd-usage alert notification for the given percentage and level.
@@ -108,21 +137,62 @@ impl NotificationService {
     }
 
     // -----------------------------------------------------------------------
-    // Private helpers
+    // Private dispatch
     // -----------------------------------------------------------------------
 
-    /// Dispatch a notification via `osascript`.
-    ///
-    /// If osascript fails the error is logged as a warning and `Ok(())` is
-    /// returned — notifications are best-effort and must never crash the app.
     pub(crate) fn send_notification(
         &self,
         title: &str,
         subtitle: &str,
         message: &str,
     ) -> Result<()> {
-        // Escape any double-quotes that appear in user-controlled strings so
-        // that the AppleScript string literals are not broken.
+        if self.use_native {
+            self.send_native(title, subtitle, message)
+        } else {
+            self.send_osascript(title, subtitle, message)
+        }
+    }
+
+    /// Dispatch via `UNUserNotificationCenter` (native macOS notifications).
+    fn send_native(&self, title: &str, subtitle: &str, message: &str) -> Result<()> {
+        use block2::RcBlock;
+        use objc2_foundation::{NSError, NSString};
+        use objc2_user_notifications::{
+            UNMutableNotificationContent, UNNotificationRequest, UNUserNotificationCenter,
+        };
+
+        let content = UNMutableNotificationContent::new();
+        content.setTitle(&NSString::from_str(title));
+        content.setSubtitle(&NSString::from_str(subtitle));
+        content.setBody(&NSString::from_str(message));
+
+        let identifier = NSString::from_str(&format!(
+            "tmuxbar-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+
+        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
+            &identifier,
+            &content,
+            None,
+        );
+
+        let center = UNUserNotificationCenter::currentNotificationCenter();
+        let handler = RcBlock::new(|error: *mut NSError| {
+            if !error.is_null() {
+                tracing::warn!("UNUserNotificationCenter: failed to deliver notification");
+            }
+        });
+        center.addNotificationRequest_withCompletionHandler(&request, Some(&handler));
+
+        Ok(())
+    }
+
+    /// Fallback: dispatch via `osascript` (opens Script Editor on click).
+    fn send_osascript(&self, title: &str, subtitle: &str, message: &str) -> Result<()> {
         let title_esc = title.replace('"', "\\\"");
         let subtitle_esc = subtitle.replace('"', "\\\"");
         let message_esc = message.replace('"', "\\\"");
@@ -175,7 +245,6 @@ mod tests {
             format_fd_alert_message(50, &AlertLevel::Normal, &Language::En),
             None
         );
-        // Normal should return None regardless of pct
         assert_eq!(
             format_fd_alert_message(0, &AlertLevel::Normal, &Language::En),
             None
@@ -299,7 +368,6 @@ mod tests {
 
     #[test]
     fn send_fd_alert_normal_is_ok() {
-        // Normal level must return Ok without attempting to send anything.
         let svc = NotificationService::new();
         let result = svc.send_fd_alert(50, &AlertLevel::Normal, &Language::En);
         assert!(result.is_ok());
