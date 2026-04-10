@@ -201,6 +201,13 @@ pub fn run() {
     // Must be on the main thread for AppKit.
     let mtm = MainThreadMarker::new().expect("TmuxBar must run on the main thread");
 
+    // .app bundles launch with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin).
+    // Augment it so that Homebrew-installed tools (tmux, etc.) are reachable.
+    let path = std::env::var("PATH").unwrap_or_default();
+    if !path.contains("/opt/homebrew/bin") {
+        std::env::set_var("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{path}"));
+    }
+
     // ------------------------------------------------------------------
     // a. Acquire instance lock — exit immediately if another instance runs
     // ------------------------------------------------------------------
