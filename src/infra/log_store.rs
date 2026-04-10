@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use chrono::Utc;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 
 use crate::models::LogEvent;
 
@@ -82,11 +82,7 @@ impl LogStore {
     /// - `event_type`: when `Some`, only rows with a matching `event_type` are
     ///   returned; when `None`, all event types are included.
     /// - `limit`: maximum number of rows to return (newest first).
-    pub fn query_events(
-        &self,
-        event_type: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<StoredEvent>> {
+    pub fn query_events(&self, event_type: Option<&str>, limit: usize) -> Result<Vec<StoredEvent>> {
         let rows = match event_type {
             Some(et) => {
                 let mut stmt = self.conn.prepare(
@@ -214,9 +210,7 @@ mod tests {
             .expect("insert SessionCreated");
 
         store
-            .insert_event(&LogEvent::SessionDestroyed {
-                name: "old".into(),
-            })
+            .insert_event(&LogEvent::SessionDestroyed { name: "old".into() })
             .expect("insert SessionDestroyed");
 
         store

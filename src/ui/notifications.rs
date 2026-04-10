@@ -13,7 +13,11 @@ use crate::models::AlertLevel;
 // ---------------------------------------------------------------------------
 
 /// Returns `(subtitle, body)` for an fd alert notification, or `None` for `Normal`.
-pub(crate) fn format_fd_alert_message(pct: u8, level: &AlertLevel, lang: &Language) -> Option<(String, String)> {
+pub(crate) fn format_fd_alert_message(
+    pct: u8,
+    level: &AlertLevel,
+    lang: &Language,
+) -> Option<(String, String)> {
     match level {
         AlertLevel::Normal => None,
         AlertLevel::Warning => Some((
@@ -32,7 +36,11 @@ pub(crate) fn format_fd_alert_message(pct: u8, level: &AlertLevel, lang: &Langua
 }
 
 /// Returns `(subtitle, body)` for an inactivity alert notification.
-pub(crate) fn format_inactivity_message(session_name: &str, mins: u64, lang: &Language) -> (String, String) {
+pub(crate) fn format_inactivity_message(
+    session_name: &str,
+    mins: u64,
+    lang: &Language,
+) -> (String, String) {
     (
         i18n::notif_inactivity_title(lang).to_string(),
         i18n::notif_inactivity_body(lang, session_name, mins),
@@ -40,7 +48,11 @@ pub(crate) fn format_inactivity_message(session_name: &str, mins: u64, lang: &La
 }
 
 /// Returns `(subtitle, body)` for a restart-result notification.
-pub(crate) fn format_restart_result_message(success: bool, details: &str, lang: &Language) -> (String, String) {
+pub(crate) fn format_restart_result_message(
+    success: bool,
+    details: &str,
+    lang: &Language,
+) -> (String, String) {
     if success {
         (
             i18n::notif_restart_success_title(lang).to_string(),
@@ -79,7 +91,12 @@ impl NotificationService {
     }
 
     /// Send a session-inactivity alert notification.
-    pub fn send_inactivity_alert(&self, session_name: &str, mins: u64, lang: &Language) -> Result<()> {
+    pub fn send_inactivity_alert(
+        &self,
+        session_name: &str,
+        mins: u64,
+        lang: &Language,
+    ) -> Result<()> {
         let (subtitle, body) = format_inactivity_message(session_name, mins, lang);
         self.send_notification("TmuxBar", &subtitle, &body)
     }
@@ -98,7 +115,12 @@ impl NotificationService {
     ///
     /// If osascript fails the error is logged as a warning and `Ok(())` is
     /// returned — notifications are best-effort and must never crash the app.
-    pub(crate) fn send_notification(&self, title: &str, subtitle: &str, message: &str) -> Result<()> {
+    pub(crate) fn send_notification(
+        &self,
+        title: &str,
+        subtitle: &str,
+        message: &str,
+    ) -> Result<()> {
         // Escape any double-quotes that appear in user-controlled strings so
         // that the AppleScript string literals are not broken.
         let title_esc = title.replace('"', "\\\"");
@@ -149,10 +171,19 @@ mod tests {
 
     #[test]
     fn normal_level_returns_none() {
-        assert_eq!(format_fd_alert_message(50, &AlertLevel::Normal, &Language::En), None);
+        assert_eq!(
+            format_fd_alert_message(50, &AlertLevel::Normal, &Language::En),
+            None
+        );
         // Normal should return None regardless of pct
-        assert_eq!(format_fd_alert_message(0, &AlertLevel::Normal, &Language::En), None);
-        assert_eq!(format_fd_alert_message(100, &AlertLevel::Normal, &Language::En), None);
+        assert_eq!(
+            format_fd_alert_message(0, &AlertLevel::Normal, &Language::En),
+            None
+        );
+        assert_eq!(
+            format_fd_alert_message(100, &AlertLevel::Normal, &Language::En),
+            None
+        );
     }
 
     #[test]
@@ -168,7 +199,10 @@ mod tests {
         let result = format_fd_alert_message(92, &AlertLevel::Elevated, &Language::En);
         let (subtitle, body) = result.expect("Elevated should produce a message");
         assert!(body.contains("92%"), "body should mention 92%: {body}");
-        assert!(body.contains('⚠'), "body should contain warning symbol: {body}");
+        assert!(
+            body.contains('⚠'),
+            "body should contain warning symbol: {body}"
+        );
         assert!(!subtitle.is_empty());
     }
 
@@ -177,7 +211,10 @@ mod tests {
         let result = format_fd_alert_message(97, &AlertLevel::Critical, &Language::En);
         let (subtitle, body) = result.expect("Critical should produce a message");
         assert!(body.contains("97%"), "body should mention 97%: {body}");
-        assert!(body.contains('🔴'), "body should contain critical indicator: {body}");
+        assert!(
+            body.contains('🔴'),
+            "body should contain critical indicator: {body}"
+        );
         assert!(!subtitle.is_empty());
     }
 
@@ -196,23 +233,36 @@ mod tests {
     #[test]
     fn inactivity_message_contains_session_and_minutes() {
         let (subtitle, body) = format_inactivity_message("my-session", 42, &Language::En);
-        assert!(body.contains("my-session"), "body should contain session name: {body}");
-        assert!(body.contains("42"), "body should contain minute count: {body}");
+        assert!(
+            body.contains("my-session"),
+            "body should contain session name: {body}"
+        );
+        assert!(
+            body.contains("42"),
+            "body should contain minute count: {body}"
+        );
         assert!(!subtitle.is_empty());
     }
 
     #[test]
     fn inactivity_message_zero_minutes() {
         let (_subtitle, body) = format_inactivity_message("work", 0, &Language::En);
-        assert!(body.contains("0 minutes"), "body should say 0 minutes: {body}");
+        assert!(
+            body.contains("0 minutes"),
+            "body should say 0 minutes: {body}"
+        );
     }
 
     // --- format_restart_result_message ---
 
     #[test]
     fn restart_success_message_contains_details() {
-        let (subtitle, body) = format_restart_result_message(true, "3 sessions restored", &Language::En);
-        assert!(body.contains("3 sessions restored"), "body should include details: {body}");
+        let (subtitle, body) =
+            format_restart_result_message(true, "3 sessions restored", &Language::En);
+        assert!(
+            body.contains("3 sessions restored"),
+            "body should include details: {body}"
+        );
         assert!(
             body.to_lowercase().contains("success") || subtitle.to_lowercase().contains("success"),
             "should mention success: subtitle={subtitle}, body={body}"
@@ -222,7 +272,10 @@ mod tests {
     #[test]
     fn restart_failure_message_contains_details() {
         let (subtitle, body) = format_restart_result_message(false, "timeout", &Language::En);
-        assert!(body.contains("timeout"), "body should include details: {body}");
+        assert!(
+            body.contains("timeout"),
+            "body should include details: {body}"
+        );
         assert!(
             body.to_lowercase().contains("fail") || subtitle.to_lowercase().contains("fail"),
             "should mention failure: subtitle={subtitle}, body={body}"

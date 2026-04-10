@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(policy.evaluate(98), Some(AlertLevel::Critical));
         // Drop within critical zone
         assert_eq!(policy.evaluate(96), None); // 96 < 98, already notified higher
-        // Rise again past last_notified
+                                               // Rise again past last_notified
         assert_eq!(policy.evaluate(99), Some(AlertLevel::Critical));
     }
 

@@ -255,11 +255,7 @@ mod tests {
     }
 
     impl MockTmux {
-        fn new(
-            sessions: Vec<RawSession>,
-            windows: Vec<RawWindow>,
-            panes: Vec<RawPane>,
-        ) -> Self {
+        fn new(sessions: Vec<RawSession>, windows: Vec<RawWindow>, panes: Vec<RawPane>) -> Self {
             Self {
                 sessions,
                 windows,
@@ -407,8 +403,8 @@ mod tests {
 
     fn make_service(mock: Arc<MockTmux>) -> (SnapshotService, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let svc = SnapshotService::new(mock, tmp.path().to_path_buf())
-            .expect("SnapshotService::new");
+        let svc =
+            SnapshotService::new(mock, tmp.path().to_path_buf()).expect("SnapshotService::new");
         (svc, tmp)
     }
 
@@ -425,13 +421,11 @@ mod tests {
         ));
         let (svc, tmp) = make_service(mock);
 
-        svc.save_session("dev").expect("save_session should succeed");
+        svc.save_session("dev")
+            .expect("save_session should succeed");
 
         let json_path = tmp.path().join("dev.json");
-        assert!(
-            json_path.exists(),
-            "expected JSON file at {json_path:?}"
-        );
+        assert!(json_path.exists(), "expected JSON file at {json_path:?}");
     }
 
     // -----------------------------------------------------------------------
@@ -442,18 +436,14 @@ mod tests {
     fn test_save_session_snapshot_content() {
         let mock = Arc::new(MockTmux::new(
             vec![],
-            vec![
-                raw_window(0, "editor"),
-                raw_window(1, "server"),
-            ],
-            vec![
-                raw_pane(0, "/home/user"),
-                raw_pane(1, "/tmp"),
-            ],
+            vec![raw_window(0, "editor"), raw_window(1, "server")],
+            vec![raw_pane(0, "/home/user"), raw_pane(1, "/tmp")],
         ));
         let (svc, tmp) = make_service(mock);
 
-        let snap = svc.save_session("myapp").expect("save_session should succeed");
+        let snap = svc
+            .save_session("myapp")
+            .expect("save_session should succeed");
 
         // Returned snapshot has correct structure
         assert_eq!(snap.name, "myapp");
@@ -465,10 +455,8 @@ mod tests {
         assert_eq!(snap.windows[0].panes[1].working_dir, "/tmp");
 
         // JSON file on disk deserialises to the same snapshot
-        let raw = std::fs::read_to_string(tmp.path().join("myapp.json"))
-            .expect("read file");
-        let from_disk: SessionSnapshot =
-            serde_json::from_str(&raw).expect("deserialise");
+        let raw = std::fs::read_to_string(tmp.path().join("myapp.json")).expect("read file");
+        let from_disk: SessionSnapshot = serde_json::from_str(&raw).expect("deserialise");
         assert_eq!(from_disk.name, snap.name);
         assert_eq!(from_disk.windows.len(), snap.windows.len());
     }
@@ -500,11 +488,14 @@ mod tests {
     #[test]
     fn test_save_all_continues_on_failure() {
         // "bad" will fail list_windows; "good" should still be saved.
-        let mock = Arc::new(MockTmux::new(
-            vec![raw_session("bad"), raw_session("good")],
-            vec![raw_window(0, "main")],
-            vec![raw_pane(0, "/tmp")],
-        ).with_fail_sessions(vec!["bad"]));
+        let mock = Arc::new(
+            MockTmux::new(
+                vec![raw_session("bad"), raw_session("good")],
+                vec![raw_window(0, "main")],
+                vec![raw_pane(0, "/tmp")],
+            )
+            .with_fail_sessions(vec!["bad"]),
+        );
 
         let (svc, tmp) = make_service(mock);
 
@@ -567,7 +558,8 @@ mod tests {
             }],
         };
 
-        svc.restore_session(&snapshot).expect("restore_session should succeed");
+        svc.restore_session(&snapshot)
+            .expect("restore_session should succeed");
 
         let log = mock.call_log();
 
@@ -605,21 +597,29 @@ mod tests {
                     name: "code".to_string(),
                     layout: "even-horizontal".to_string(),
                     panes: vec![
-                        PaneSnapshot { working_dir: "/src".to_string(), index: 0 },
-                        PaneSnapshot { working_dir: "/src/tests".to_string(), index: 1 },
+                        PaneSnapshot {
+                            working_dir: "/src".to_string(),
+                            index: 0,
+                        },
+                        PaneSnapshot {
+                            working_dir: "/src/tests".to_string(),
+                            index: 1,
+                        },
                     ],
                 },
                 WindowSnapshot {
                     name: "server".to_string(),
                     layout: "main-vertical".to_string(),
-                    panes: vec![
-                        PaneSnapshot { working_dir: "/srv".to_string(), index: 0 },
-                    ],
+                    panes: vec![PaneSnapshot {
+                        working_dir: "/srv".to_string(),
+                        index: 0,
+                    }],
                 },
             ],
         };
 
-        svc.restore_session(&snapshot).expect("restore_session should succeed");
+        svc.restore_session(&snapshot)
+            .expect("restore_session should succeed");
 
         let log = mock.call_log();
 
@@ -689,7 +689,9 @@ mod tests {
         )
         .expect("write good file");
 
-        let report = svc.restore_all().expect("restore_all should not propagate errors");
+        let report = svc
+            .restore_all()
+            .expect("restore_all should not propagate errors");
 
         assert_eq!(report.restored, vec!["good"]);
         assert_eq!(report.failed.len(), 1);
@@ -702,10 +704,7 @@ mod tests {
 
     #[test]
     fn test_restore_session_with_base_index_one() {
-        let mock = Arc::new(
-            MockTmux::new(vec![], vec![], vec![])
-                .with_base_index("1", "0"),
-        );
+        let mock = Arc::new(MockTmux::new(vec![], vec![], vec![]).with_base_index("1", "0"));
         let (svc, _tmp) = make_service(mock.clone());
 
         let snapshot = SessionSnapshot {
@@ -715,31 +714,57 @@ mod tests {
                     name: "code".to_string(),
                     layout: "main-vertical".to_string(),
                     panes: vec![
-                        PaneSnapshot { working_dir: "/src".to_string(), index: 0 },
-                        PaneSnapshot { working_dir: "/test".to_string(), index: 1 },
+                        PaneSnapshot {
+                            working_dir: "/src".to_string(),
+                            index: 0,
+                        },
+                        PaneSnapshot {
+                            working_dir: "/test".to_string(),
+                            index: 1,
+                        },
                     ],
                 },
                 WindowSnapshot {
                     name: "logs".to_string(),
                     layout: "even-horizontal".to_string(),
-                    panes: vec![
-                        PaneSnapshot { working_dir: "/var/log".to_string(), index: 0 },
-                    ],
+                    panes: vec![PaneSnapshot {
+                        working_dir: "/var/log".to_string(),
+                        index: 0,
+                    }],
                 },
             ],
         };
 
-        svc.restore_session(&snapshot).expect("restore should succeed");
+        svc.restore_session(&snapshot)
+            .expect("restore should succeed");
 
         let log = mock.call_log();
 
         // Window indices should be 1, 2 (not 0, 1) due to base-index=1
-        assert!(log.contains(&"split_window:proj:1".to_string()), "split should target window 1: {log:?}");
-        assert!(log.contains(&"send_keys:proj:1.0:cd '/src'".to_string()), "pane target should use window 1: {log:?}");
-        assert!(log.contains(&"send_keys:proj:1.1:cd '/test'".to_string()), "{log:?}");
-        assert!(log.contains(&"send_keys:proj:2.0:cd '/var/log'".to_string()), "second window should be 2: {log:?}");
-        assert!(log.contains(&"select_layout:proj:1:main-vertical".to_string()), "{log:?}");
-        assert!(log.contains(&"select_layout:proj:2:even-horizontal".to_string()), "{log:?}");
+        assert!(
+            log.contains(&"split_window:proj:1".to_string()),
+            "split should target window 1: {log:?}"
+        );
+        assert!(
+            log.contains(&"send_keys:proj:1.0:cd '/src'".to_string()),
+            "pane target should use window 1: {log:?}"
+        );
+        assert!(
+            log.contains(&"send_keys:proj:1.1:cd '/test'".to_string()),
+            "{log:?}"
+        );
+        assert!(
+            log.contains(&"send_keys:proj:2.0:cd '/var/log'".to_string()),
+            "second window should be 2: {log:?}"
+        );
+        assert!(
+            log.contains(&"select_layout:proj:1:main-vertical".to_string()),
+            "{log:?}"
+        );
+        assert!(
+            log.contains(&"select_layout:proj:2:even-horizontal".to_string()),
+            "{log:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -748,10 +773,7 @@ mod tests {
 
     #[test]
     fn test_restore_session_with_pane_base_index_one() {
-        let mock = Arc::new(
-            MockTmux::new(vec![], vec![], vec![])
-                .with_base_index("0", "1"),
-        );
+        let mock = Arc::new(MockTmux::new(vec![], vec![], vec![]).with_base_index("0", "1"));
         let (svc, _tmp) = make_service(mock.clone());
 
         let snapshot = SessionSnapshot {
@@ -760,18 +782,31 @@ mod tests {
                 name: "main".to_string(),
                 layout: "tiled".to_string(),
                 panes: vec![
-                    PaneSnapshot { working_dir: "/a".to_string(), index: 0 },
-                    PaneSnapshot { working_dir: "/b".to_string(), index: 1 },
+                    PaneSnapshot {
+                        working_dir: "/a".to_string(),
+                        index: 0,
+                    },
+                    PaneSnapshot {
+                        working_dir: "/b".to_string(),
+                        index: 1,
+                    },
                 ],
             }],
         };
 
-        svc.restore_session(&snapshot).expect("restore should succeed");
+        svc.restore_session(&snapshot)
+            .expect("restore should succeed");
 
         let log = mock.call_log();
 
         // Pane indices should be 1, 2 (not 0, 1) due to pane-base-index=1
-        assert!(log.contains(&"send_keys:app:0.1:cd '/a'".to_string()), "pane 0 should become index 1: {log:?}");
-        assert!(log.contains(&"send_keys:app:0.2:cd '/b'".to_string()), "pane 1 should become index 2: {log:?}");
+        assert!(
+            log.contains(&"send_keys:app:0.1:cd '/a'".to_string()),
+            "pane 0 should become index 1: {log:?}"
+        );
+        assert!(
+            log.contains(&"send_keys:app:0.2:cd '/b'".to_string()),
+            "pane 1 should become index 2: {log:?}"
+        );
     }
 }

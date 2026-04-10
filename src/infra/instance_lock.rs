@@ -29,9 +29,8 @@ impl InstanceLock {
 
         // Ensure parent directory exists.
         if let Some(parent) = lock_path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create lock directory {}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create lock directory {}", parent.display()))?;
         }
 
         // Open (or create) the lock file.

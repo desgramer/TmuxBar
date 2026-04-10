@@ -1,5 +1,5 @@
-use std::mem;
 use std::ffi::CStr;
+use std::mem;
 use std::sync::Mutex;
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
@@ -74,9 +74,7 @@ impl SystemProbe for MacSysProbe {
         let current = sysctl_by_name(c"kern.num_files")?;
         let max = sysctl_by_name(c"kern.maxfiles")?;
         if current < 0 || max <= 0 {
-            anyhow::bail!(
-                "sysctl returned invalid fd values: current={current}, max={max}"
-            );
+            anyhow::bail!("sysctl returned invalid fd values: current={current}, max={max}");
         }
         Ok((current as u64, max as u64))
     }
@@ -87,9 +85,10 @@ impl SystemProbe for MacSysProbe {
     /// which is why we hold the `System` instance for reuse.
     fn process_stats(&self, pid: u32) -> anyhow::Result<ProcStats> {
         let sysinfo_pid = Pid::from(pid as usize);
-        let mut sys = self.system.lock().map_err(|e| {
-            anyhow::anyhow!("sysinfo mutex poisoned: {e}")
-        })?;
+        let mut sys = self
+            .system
+            .lock()
+            .map_err(|e| anyhow::anyhow!("sysinfo mutex poisoned: {e}"))?;
 
         // Refresh only the target process for efficiency.
         sys.refresh_processes_specifics(

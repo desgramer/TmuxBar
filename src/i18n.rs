@@ -212,7 +212,9 @@ pub fn notif_fd_critical(lang: &Language, pct: u8) -> String {
     match lang {
         Language::Ko => format!("🔴 파일 디스크립터 사용량 {pct}% — 재시작을 고려하세요"),
         Language::En => format!("🔴 File descriptor usage at {pct}% — consider restarting"),
-        Language::Ja => format!("🔴 ファイルディスクリプタ使用率 {pct}% — 再起動を検討してください"),
+        Language::Ja => {
+            format!("🔴 ファイルディスクリプタ使用率 {pct}% — 再起動を検討してください")
+        }
         Language::Zh => format!("🔴 文件描述符使用率 {pct}% — 建议重启"),
     }
 }

@@ -60,17 +60,15 @@ impl RestartService {
     pub fn execute_restart(&self, lang: &Language) -> Result<()> {
         // Helper: log a phase result through the Mutex-guarded EventLogger.
         // Silently skipped when no log store is available.
-        let log_phase = |phase: RestartPhase, success: bool| {
-            match self.event_logger.lock() {
-                Ok(mut guard) => {
-                    if let Some(ref mut logger) = *guard {
-                        if let Err(e) = logger.log_safe_restart(phase, success) {
-                            tracing::warn!("Failed to log restart phase: {e:#}");
-                        }
+        let log_phase = |phase: RestartPhase, success: bool| match self.event_logger.lock() {
+            Ok(mut guard) => {
+                if let Some(ref mut logger) = *guard {
+                    if let Err(e) = logger.log_safe_restart(phase, success) {
+                        tracing::warn!("Failed to log restart phase: {e:#}");
                     }
                 }
-                Err(e) => tracing::warn!("EventLogger mutex poisoned: {e}"),
             }
+            Err(e) => tracing::warn!("EventLogger mutex poisoned: {e}"),
         };
 
         // ------------------------------------------------------------------
@@ -187,9 +185,9 @@ impl RestartService {
             parts.join("; ")
         };
 
-        if let Err(e) = self
-            .notification_service
-            .send_restart_result(overall_success, &details, lang)
+        if let Err(e) =
+            self.notification_service
+                .send_restart_result(overall_success, &details, lang)
         {
             tracing::warn!("Failed to send restart-result notification: {e:#}");
         }
@@ -302,10 +300,18 @@ mod tests {
             Ok(0)
         }
 
-        fn new_window(&self, _session: &str, _name: &str) -> anyhow::Result<()> { Ok(()) }
-        fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> { Ok(()) }
-        fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> { Ok(()) }
-        fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> { Ok(()) }
+        fn new_window(&self, _session: &str, _name: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
         fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
             Ok("0".to_string())
         }
@@ -318,18 +324,19 @@ mod tests {
     // Helpers
     // -----------------------------------------------------------------------
 
-    fn make_service(
-        tmux: Arc<MockTmux>,
-    ) -> (RestartService, tempfile::TempDir) {
+    fn make_service(tmux: Arc<MockTmux>) -> (RestartService, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let snapshot_service = Arc::new(
-            SnapshotService::new(Arc::clone(&tmux) as Arc<dyn TmuxAdapter>, tmp.path().to_path_buf())
-                .expect("SnapshotService::new"),
+            SnapshotService::new(
+                Arc::clone(&tmux) as Arc<dyn TmuxAdapter>,
+                tmp.path().to_path_buf(),
+            )
+            .expect("SnapshotService::new"),
         );
 
-        let log_store = LogStore::new(std::path::Path::new(":memory:"))
-            .expect("in-memory LogStore");
+        let log_store =
+            LogStore::new(std::path::Path::new(":memory:")).expect("in-memory LogStore");
         let event_logger = Some(EventLogger::new(log_store));
         let notification_service = NotificationService::new();
 
@@ -356,9 +363,18 @@ mod tests {
 
         let log = tmux.call_log();
         // list_sessions is called by save_all
-        assert!(log.contains(&"list_sessions".to_string()), "expected list_sessions");
-        assert!(log.contains(&"kill_server".to_string()), "expected kill_server");
-        assert!(log.contains(&"start_server".to_string()), "expected start_server");
+        assert!(
+            log.contains(&"list_sessions".to_string()),
+            "expected list_sessions"
+        );
+        assert!(
+            log.contains(&"kill_server".to_string()),
+            "expected kill_server"
+        );
+        assert!(
+            log.contains(&"start_server".to_string()),
+            "expected start_server"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -376,26 +392,48 @@ mod tests {
             fn list_sessions(&self) -> Result<Vec<RawSession>> {
                 anyhow::bail!("simulated list_sessions failure");
             }
-            fn list_windows(&self, _: &str) -> Result<Vec<RawWindow>> { Ok(vec![]) }
-            fn list_panes(&self, _: &str, _: &str) -> Result<Vec<RawPane>> { Ok(vec![]) }
-            fn new_session(&self, _: &str) -> Result<()> { Ok(()) }
-            fn kill_session(&self, _: &str) -> Result<()> { Ok(()) }
+            fn list_windows(&self, _: &str) -> Result<Vec<RawWindow>> {
+                Ok(vec![])
+            }
+            fn list_panes(&self, _: &str, _: &str) -> Result<Vec<RawPane>> {
+                Ok(vec![])
+            }
+            fn new_session(&self, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn kill_session(&self, _: &str) -> Result<()> {
+                Ok(())
+            }
             fn kill_server(&self) -> Result<()> {
                 panic!("kill_server must NOT be called after snapshot failure");
             }
             fn start_server(&self) -> Result<()> {
                 panic!("start_server must NOT be called after snapshot failure");
             }
-            fn attach_session(&self, _: &str) -> Result<()> { Ok(()) }
-            fn session_activity(&self, _: &str) -> Result<i64> { Ok(0) }
-            fn new_window(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
-            fn split_window(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
-            fn send_keys(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
-            fn select_layout(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
+            fn attach_session(&self, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn session_activity(&self, _: &str) -> Result<i64> {
+                Ok(0)
+            }
+            fn new_window(&self, _: &str, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn split_window(&self, _: &str, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn send_keys(&self, _: &str, _: &str) -> Result<()> {
+                Ok(())
+            }
+            fn select_layout(&self, _: &str, _: &str) -> Result<()> {
+                Ok(())
+            }
             fn get_global_option(&self, _: &str) -> anyhow::Result<String> {
                 Ok("0".to_string())
             }
-            fn rename_session(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
+            fn rename_session(&self, _: &str, _: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
         }
 
         let tmux: Arc<dyn TmuxAdapter> = Arc::new(FailListSessions);
@@ -405,20 +443,18 @@ mod tests {
             SnapshotService::new(Arc::clone(&tmux), tmp.path().to_path_buf())
                 .expect("SnapshotService::new"),
         );
-        let log_store = LogStore::new(std::path::Path::new(":memory:"))
-            .expect("in-memory LogStore");
+        let log_store =
+            LogStore::new(std::path::Path::new(":memory:")).expect("in-memory LogStore");
         let event_logger = Some(EventLogger::new(log_store));
         let notification_service = NotificationService::new();
 
-        let svc = RestartService::new(
-            snapshot_service,
-            tmux,
-            event_logger,
-            notification_service,
-        );
+        let svc = RestartService::new(snapshot_service, tmux, event_logger, notification_service);
 
         let result = svc.execute_restart(&Language::En);
-        assert!(result.is_err(), "execute_restart should fail when snapshots cannot be saved");
+        assert!(
+            result.is_err(),
+            "execute_restart should fail when snapshots cannot be saved"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -445,8 +481,7 @@ mod tests {
         .expect("write good.json");
 
         // Write a broken snapshot file to trigger a parse failure
-        std::fs::write(tmp.path().join("bad.json"), b"not valid json")
-            .expect("write bad.json");
+        std::fs::write(tmp.path().join("bad.json"), b"not valid json").expect("write bad.json");
 
         let snapshot_service = Arc::new(
             SnapshotService::new(
@@ -455,8 +490,8 @@ mod tests {
             )
             .expect("SnapshotService::new"),
         );
-        let log_store = LogStore::new(std::path::Path::new(":memory:"))
-            .expect("in-memory LogStore");
+        let log_store =
+            LogStore::new(std::path::Path::new(":memory:")).expect("in-memory LogStore");
         let event_logger = Some(EventLogger::new(log_store));
         let notification_service = NotificationService::new();
 
@@ -476,8 +511,14 @@ mod tests {
 
         // kill_server and start_server must have been called
         let log = tmux.call_log();
-        assert!(log.contains(&"kill_server".to_string()), "kill_server must be called");
-        assert!(log.contains(&"start_server".to_string()), "start_server must be called");
+        assert!(
+            log.contains(&"kill_server".to_string()),
+            "kill_server must be called"
+        );
+        assert!(
+            log.contains(&"start_server".to_string()),
+            "start_server must be called"
+        );
         // new_session was called for the valid snapshot
         assert!(
             log.contains(&"new_session:good".to_string()),
@@ -517,12 +558,15 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let snapshot_service = Arc::new(
-            SnapshotService::new(Arc::clone(&tmux) as Arc<dyn TmuxAdapter>, tmp.path().to_path_buf())
-                .expect("SnapshotService::new"),
+            SnapshotService::new(
+                Arc::clone(&tmux) as Arc<dyn TmuxAdapter>,
+                tmp.path().to_path_buf(),
+            )
+            .expect("SnapshotService::new"),
         );
 
-        let log_store = LogStore::new(std::path::Path::new(":memory:"))
-            .expect("in-memory LogStore");
+        let log_store =
+            LogStore::new(std::path::Path::new(":memory:")).expect("in-memory LogStore");
         let event_logger = Some(EventLogger::new(log_store));
         let notification_service = NotificationService::new();
 
@@ -537,7 +581,13 @@ mod tests {
         svc.execute_restart(&Language::En).expect("execute_restart");
 
         let log = tmux.call_log();
-        assert!(log.contains(&"kill_server".to_string()), "kill_server must be called");
-        assert!(log.contains(&"start_server".to_string()), "start_server must be called");
+        assert!(
+            log.contains(&"kill_server".to_string()),
+            "kill_server must be called"
+        );
+        assert!(
+            log.contains(&"start_server".to_string()),
+            "start_server must be called"
+        );
     }
 }

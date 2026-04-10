@@ -96,7 +96,9 @@ mod tests {
     fn session_created_and_destroyed_are_stored() {
         let (logger, _dir) = make_logger();
 
-        logger.log_session_created("main").expect("log_session_created");
+        logger
+            .log_session_created("main")
+            .expect("log_session_created");
         logger
             .log_session_destroyed("old")
             .expect("log_session_destroyed");
@@ -163,10 +165,7 @@ mod tests {
             .log_safe_restart(RestartPhase::SnapshotSave, false)
             .expect("safe_restart");
 
-        let all = logger
-            .store
-            .query_events(None, 100)
-            .expect("query all");
+        let all = logger.store.query_events(None, 100).expect("query all");
         assert_eq!(all.len(), 5);
 
         let fd_rows = logger

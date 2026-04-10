@@ -174,20 +174,10 @@ impl Default for AlertConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LogEvent {
-    FdSpike {
-        pct: u8,
-        timestamp: DateTime<Utc>,
-    },
-    SessionCreated {
-        name: String,
-    },
-    SessionDestroyed {
-        name: String,
-    },
-    SafeRestart {
-        phase: RestartPhase,
-        success: bool,
-    },
+    FdSpike { pct: u8, timestamp: DateTime<Utc> },
+    SessionCreated { name: String },
+    SessionDestroyed { name: String },
+    SafeRestart { phase: RestartPhase, success: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

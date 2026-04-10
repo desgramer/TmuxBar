@@ -76,7 +76,10 @@ mod tests {
             make_session("gamma", now - 300),
         ];
         let result = detector.check_inactive(&sessions, now);
-        assert!(result.is_empty(), "expected no inactive sessions, got {result:?}");
+        assert!(
+            result.is_empty(),
+            "expected no inactive sessions, got {result:?}"
+        );
     }
 
     #[test]
@@ -85,7 +88,7 @@ mod tests {
         let now = 1_000_000_i64;
         let sessions = vec![
             make_session("active1", now - 100),
-            make_session("idle", now - 500),   // 500 > 300 → inactive
+            make_session("idle", now - 500), // 500 > 300 → inactive
             make_session("active2", now - 299),
         ];
         let result = detector.check_inactive(&sessions, now);

@@ -44,8 +44,8 @@ impl LaunchAgent {
     /// Determines the current binary path via `std::env::current_exe()`,
     /// creates the parent directory if needed, and writes the plist file.
     pub fn install() -> Result<()> {
-        let binary_path = std::env::current_exe()
-            .context("failed to determine current binary path")?;
+        let binary_path =
+            std::env::current_exe().context("failed to determine current binary path")?;
         let binary_path_str = binary_path
             .to_str()
             .context("binary path contains non-UTF-8 characters")?;
@@ -55,14 +55,16 @@ impl LaunchAgent {
         // Create parent directory if it does not exist.
         if let Some(parent) = plist_path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create LaunchAgents directory: {}", parent.display())
+                format!(
+                    "failed to create LaunchAgents directory: {}",
+                    parent.display()
+                )
             })?;
         }
 
         let content = Self::plist_content(binary_path_str);
-        std::fs::write(&plist_path, &content).with_context(|| {
-            format!("failed to write plist to {}", plist_path.display())
-        })?;
+        std::fs::write(&plist_path, &content)
+            .with_context(|| format!("failed to write plist to {}", plist_path.display()))?;
 
         tracing::info!("LaunchAgent installed at {}", plist_path.display());
         Ok(())
@@ -99,9 +101,8 @@ impl LaunchAgent {
 
         // Remove the plist file if it exists.
         if plist_path.exists() {
-            std::fs::remove_file(&plist_path).with_context(|| {
-                format!("failed to remove plist at {}", plist_path.display())
-            })?;
+            std::fs::remove_file(&plist_path)
+                .with_context(|| format!("failed to remove plist at {}", plist_path.display()))?;
             tracing::info!("LaunchAgent uninstalled from {}", plist_path.display());
         }
 
@@ -165,10 +166,7 @@ mod tests {
             path.display()
         );
         let home = dirs::home_dir().expect("no home dir");
-        assert!(
-            path.starts_with(&home),
-            "path should start with home dir"
-        );
+        assert!(path.starts_with(&home), "path should start with home dir");
     }
 
     // --- plist_content --------------------------------------------------------

@@ -49,10 +49,7 @@ impl ConfigWatcher {
             };
 
             // Only react to data-write events (modify / create).
-            let is_modify = matches!(
-                event.kind,
-                EventKind::Modify(_) | EventKind::Create(_)
-            );
+            let is_modify = matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_));
             if !is_modify {
                 return;
             }
@@ -178,7 +175,10 @@ mod tests {
 
         for i in 1u64..=10 {
             let t = t0 + Duration::from_millis(i * 10); // 10-100 ms — all < 500 ms
-            assert!(!should_process(&mut last, t), "event at {i}*10ms should be debounced");
+            assert!(
+                !should_process(&mut last, t),
+                "event at {i}*10ms should be debounced"
+            );
         }
     }
 
@@ -203,7 +203,11 @@ mod tests {
         use crate::core::fd_alert_policy::FdAlertPolicy;
         use crate::models::{AlertConfig, AlertLevel};
 
-        let initial = AlertConfig { warn_pct: 85, elevated_pct: 90, crit_pct: 95 };
+        let initial = AlertConfig {
+            warn_pct: 85,
+            elevated_pct: 90,
+            crit_pct: 95,
+        };
         let mut policy = FdAlertPolicy::new(initial);
 
         // Trigger a notification so last_notified_pct is set.
@@ -213,7 +217,11 @@ mod tests {
         assert_eq!(policy.evaluate(87), None);
 
         // Update config: this should reset state so the next evaluate fires again.
-        let new_config = AlertConfig { warn_pct: 80, elevated_pct: 88, crit_pct: 93 };
+        let new_config = AlertConfig {
+            warn_pct: 80,
+            elevated_pct: 88,
+            crit_pct: 93,
+        };
         policy.update_config(new_config);
 
         // After reset, 80 (new warn threshold) should fire Warning again.
@@ -225,14 +233,22 @@ mod tests {
         use crate::core::fd_alert_policy::FdAlertPolicy;
         use crate::models::{AlertConfig, AlertLevel};
 
-        let initial = AlertConfig { warn_pct: 85, elevated_pct: 90, crit_pct: 95 };
+        let initial = AlertConfig {
+            warn_pct: 85,
+            elevated_pct: 90,
+            crit_pct: 95,
+        };
         let mut policy = FdAlertPolicy::new(initial);
 
         // 80% is below the initial warn threshold → no alert.
         assert_eq!(policy.evaluate(80), None);
 
         // Lower the warn threshold to 75%.
-        let new_config = AlertConfig { warn_pct: 75, elevated_pct: 85, crit_pct: 92 };
+        let new_config = AlertConfig {
+            warn_pct: 75,
+            elevated_pct: 85,
+            crit_pct: 92,
+        };
         policy.update_config(new_config);
 
         // 80% is now above the new warn threshold → Warning.
@@ -284,11 +300,8 @@ fd_warn_pct = 70
         let config_path = tmp_dir.path().join("config.toml");
 
         // Write initial config.
-        std::fs::write(
-            &config_path,
-            "[monitor]\npoll_interval_secs = 3\n",
-        )
-        .expect("write initial config");
+        std::fs::write(&config_path, "[monitor]\npoll_interval_secs = 3\n")
+            .expect("write initial config");
 
         let fired = Arc::new(AtomicBool::new(false));
         let fired_clone = Arc::clone(&fired);
@@ -305,11 +318,8 @@ fd_warn_pct = 70
         std::thread::sleep(Duration::from_millis(200));
 
         // Write new config.
-        std::fs::write(
-            &config_path,
-            "[monitor]\npoll_interval_secs = 42\n",
-        )
-        .expect("write updated config");
+        std::fs::write(&config_path, "[monitor]\npoll_interval_secs = 42\n")
+            .expect("write updated config");
 
         // Wait up to 3 s for the callback to fire.
         let deadline = Instant::now() + Duration::from_secs(3);

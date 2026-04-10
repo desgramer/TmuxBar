@@ -6,9 +6,7 @@ use tokio::sync::broadcast;
 use tokio::time;
 use tracing;
 
-use crate::models::{
-    MonitorEvent, SessionStats, SessionStatus, SystemProbe, TmuxAdapter,
-};
+use crate::models::{MonitorEvent, SessionStats, SessionStatus, SystemProbe, TmuxAdapter};
 
 // ---------------------------------------------------------------------------
 // MonitorService
@@ -138,7 +136,11 @@ impl MonitorService {
             0u8
         } else {
             let raw = (fd_current * 100) / fd_max;
-            if raw > 100 { 100u8 } else { raw as u8 }
+            if raw > 100 {
+                100u8
+            } else {
+                raw as u8
+            }
         };
 
         // --- Per-session stats ---
@@ -158,10 +160,7 @@ impl MonitorService {
                     });
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to collect stats for session '{}': {e:#}",
-                        raw.name
-                    );
+                    tracing::warn!("Failed to collect stats for session '{}': {e:#}", raw.name);
                 }
             }
         }
@@ -197,11 +196,7 @@ mod tests {
     }
 
     impl MockTmux {
-        fn new(
-            sessions: Vec<RawSession>,
-            windows: Vec<RawWindow>,
-            panes: Vec<RawPane>,
-        ) -> Self {
+        fn new(sessions: Vec<RawSession>, windows: Vec<RawWindow>, panes: Vec<RawPane>) -> Self {
             Self {
                 sessions,
                 windows,
@@ -247,10 +242,18 @@ mod tests {
             Ok(0)
         }
 
-        fn new_window(&self, _session: &str, _name: &str) -> anyhow::Result<()> { Ok(()) }
-        fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> { Ok(()) }
-        fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> { Ok(()) }
-        fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> { Ok(()) }
+        fn new_window(&self, _session: &str, _name: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
         fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
             Ok("0".to_string())
         }
@@ -311,12 +314,30 @@ mod tests {
         let tmux = Arc::new(MockTmux::new(
             vec![],
             vec![
-                RawWindow { index: 0, name: "a".into(), layout: "l".into() },
-                RawWindow { index: 1, name: "b".into(), layout: "l".into() },
+                RawWindow {
+                    index: 0,
+                    name: "a".into(),
+                    layout: "l".into(),
+                },
+                RawWindow {
+                    index: 1,
+                    name: "b".into(),
+                    layout: "l".into(),
+                },
             ],
             vec![
-                RawPane { index: 0, pid: 100, current_dir: "/".into(), current_command: "sh".into() },
-                RawPane { index: 1, pid: 101, current_dir: "/".into(), current_command: "vi".into() },
+                RawPane {
+                    index: 0,
+                    pid: 100,
+                    current_dir: "/".into(),
+                    current_command: "sh".into(),
+                },
+                RawPane {
+                    index: 1,
+                    pid: 101,
+                    current_dir: "/".into(),
+                    current_command: "vi".into(),
+                },
             ],
         ));
         // Each pane returns cpu=10.0, mem=1024
@@ -336,7 +357,11 @@ mod tests {
     fn test_collect_session_stats_empty_panes() {
         let tmux = Arc::new(MockTmux::new(
             vec![],
-            vec![RawWindow { index: 0, name: "w".into(), layout: "l".into() }],
+            vec![RawWindow {
+                index: 0,
+                name: "w".into(),
+                layout: "l".into(),
+            }],
             vec![], // no panes
         ));
         let sys = Arc::new(MockSysProbe::new(0, 0, 99.0, 9999));
@@ -391,8 +416,17 @@ mod tests {
                 attached_clients: 1,
                 activity: 1_700_001_000,
             }],
-            vec![RawWindow { index: 0, name: "w".into(), layout: "l".into() }],
-            vec![RawPane { index: 0, pid: 42, current_dir: "/".into(), current_command: "sh".into() }],
+            vec![RawWindow {
+                index: 0,
+                name: "w".into(),
+                layout: "l".into(),
+            }],
+            vec![RawPane {
+                index: 0,
+                pid: 42,
+                current_dir: "/".into(),
+                current_command: "sh".into(),
+            }],
         ));
         let sys = Arc::new(MockSysProbe::new(200, 1000, 5.0, 2048));
 

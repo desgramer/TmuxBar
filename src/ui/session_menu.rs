@@ -64,10 +64,8 @@ impl SessionMenuBuilder {
             session_item.setEnabled(true);
 
             // Submenu for destructive / edit actions only.
-            let submenu = NSMenu::initWithTitle(
-                NSMenu::alloc(mtm),
-                &NSString::from_str(&session.name),
-            );
+            let submenu =
+                NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(&session.name));
 
             let rename_item = make_item(mtm, i18n::menu_rename(lang), handler);
             rename_item.setTag(TAG_RENAME_SESSION_BASE + idx as isize);
@@ -128,7 +126,10 @@ pub fn format_uptime(duration: &chrono::Duration) -> String {
 /// Pattern: `"<name> (<uptime>) — <command>"` with optional stats suffix.
 pub fn format_session_title(session: &Session) -> String {
     let uptime = format_uptime(&session.uptime);
-    let mut title = format!("{} ({}) — {}", session.name, uptime, session.foreground_command);
+    let mut title = format!(
+        "{} ({}) — {}",
+        session.name, uptime, session.foreground_command
+    );
 
     if let Some(ref stats) = session.stats {
         let stats_str = format_stats(stats);
@@ -245,10 +246,7 @@ mod tests {
             attached_clients: 1,
             stats: None,
         };
-        assert_eq!(
-            format_session_title(&session),
-            "dev (2h 15m) — vim"
-        );
+        assert_eq!(format_session_title(&session), "dev (2h 15m) — vim");
     }
 
     #[test]
@@ -323,7 +321,14 @@ mod tests {
 
     #[test]
     fn test_tag_constants_are_distinct() {
-        let tags = [TAG_NEW_SESSION, TAG_KILL_SERVER, TAG_SETTINGS, TAG_QUIT, TAG_KILL_SESSION_BASE, TAG_RENAME_SESSION_BASE];
+        let tags = [
+            TAG_NEW_SESSION,
+            TAG_KILL_SERVER,
+            TAG_SETTINGS,
+            TAG_QUIT,
+            TAG_KILL_SESSION_BASE,
+            TAG_RENAME_SESSION_BASE,
+        ];
         for (i, a) in tags.iter().enumerate() {
             for (j, b) in tags.iter().enumerate() {
                 if i != j {

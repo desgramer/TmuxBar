@@ -13,6 +13,7 @@ use crate::core::monitor_service::MonitorService;
 use crate::core::restart_service::RestartService;
 use crate::core::session_manager::SessionManager;
 use crate::core::snapshot_service::SnapshotService;
+use crate::i18n::Language;
 use crate::infra::config::AppConfig;
 use crate::infra::config_watcher::ConfigWatcher;
 use crate::infra::instance_lock::InstanceLock;
@@ -20,7 +21,6 @@ use crate::infra::launch_agent::LaunchAgent;
 use crate::infra::log_store::LogStore;
 use crate::infra::sys_probe::MacSysProbe;
 use crate::infra::tmux_client::TmuxClient;
-use crate::i18n::Language;
 use crate::models::{AlertLevel, AppCommand, MonitorEvent, Session};
 use crate::ui::menu_action_handler::MenuActionHandler;
 use crate::ui::menu_bar::{self, MenuBarApp};
@@ -274,9 +274,7 @@ pub fn run() {
     let log_store_opt = match LogStore::new(&LogStore::default_path()) {
         Ok(store) => Some(store),
         Err(e) => {
-            tracing::warn!(
-                "Failed to open log store (fd spikes will not be persisted): {e:#}"
-            );
+            tracing::warn!("Failed to open log store (fd spikes will not be persisted): {e:#}");
             None
         }
     };
@@ -284,9 +282,12 @@ pub fn run() {
     // ------------------------------------------------------------------
     // e. Create core services (some conditional on tmux availability)
     // ------------------------------------------------------------------
-    let fd_alert_policy = Arc::new(Mutex::new(FdAlertPolicy::new(config.monitor.alert_config())));
+    let fd_alert_policy = Arc::new(Mutex::new(FdAlertPolicy::new(
+        config.monitor.alert_config(),
+    )));
     let inactivity_timeout_secs = config.monitor.inactivity_timeout_mins * 60;
-    let inactivity_detector = Arc::new(Mutex::new(InactivityDetector::new(inactivity_timeout_secs)));
+    let inactivity_detector =
+        Arc::new(Mutex::new(InactivityDetector::new(inactivity_timeout_secs)));
     let event_logger = log_store_opt.map(EventLogger::new);
     let notification_service = NotificationService::new();
 
@@ -303,11 +304,13 @@ pub fn run() {
             config.monitor.poll_interval_secs,
             64, // broadcast channel capacity
         );
-        (Some(monitor_service), Some(monitor_rx), Some(session_manager))
+        (
+            Some(monitor_service),
+            Some(monitor_rx),
+            Some(session_manager),
+        )
     } else {
-        tracing::warn!(
-            "tmux not available — MonitorService and SessionManager are disabled."
-        );
+        tracing::warn!("tmux not available — MonitorService and SessionManager are disabled.");
         (None, None, None)
     };
 
@@ -401,9 +404,8 @@ pub fn run() {
     let watcher_fd_policy = Arc::clone(&fd_alert_policy);
     let watcher_inactivity = Arc::clone(&inactivity_detector);
     let watcher_state = Arc::clone(&shared_state);
-    let _config_watcher = match ConfigWatcher::start(
-        AppConfig::config_path(),
-        move |new_cfg: AppConfig| {
+    let _config_watcher =
+        match ConfigWatcher::start(AppConfig::config_path(), move |new_cfg: AppConfig| {
             tracing::info!("Config reloaded");
 
             // Update language in shared state.
@@ -424,7 +426,9 @@ pub fn run() {
 
             // Update InactivityDetector timeout.
             match watcher_inactivity.lock() {
-                Ok(mut detector) => detector.update_timeout(new_cfg.monitor.inactivity_timeout_mins * 60),
+                Ok(mut detector) => {
+                    detector.update_timeout(new_cfg.monitor.inactivity_timeout_mins * 60)
+                }
                 Err(e) => {
                     tracing::error!("InactivityDetector mutex poisoned on config reload: {e}");
                     return;
@@ -435,17 +439,19 @@ pub fn run() {
             if let Err(e) = LaunchAgent::sync_with_config(new_cfg.general.launch_at_login) {
                 tracing::warn!("Config reload: failed to sync LaunchAgent: {e:#}");
             }
-        },
-    ) {
-        Ok(w) => {
-            tracing::info!("Config watcher started for {}", AppConfig::config_path().display());
-            Some(w)
-        }
-        Err(e) => {
-            tracing::warn!("Failed to start config watcher: {e:#}");
-            None
-        }
-    };
+        }) {
+            Ok(w) => {
+                tracing::info!(
+                    "Config watcher started for {}",
+                    AppConfig::config_path().display()
+                );
+                Some(w)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to start config watcher: {e:#}");
+                None
+            }
+        };
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -481,7 +487,12 @@ pub fn run() {
     // Build the initial menu from whatever sessions exist right now.
     {
         let state = shared_state.lock().unwrap();
-        let menu = SessionMenuBuilder::build_menu(mtm, &state.sessions, Some(&action_handler), &state.language);
+        let menu = SessionMenuBuilder::build_menu(
+            mtm,
+            &state.sessions,
+            Some(&action_handler),
+            &state.language,
+        );
         menu_bar.set_menu(&menu);
     }
 
@@ -518,10 +529,13 @@ pub fn run() {
                         // the NSApplication run loop and we are on the main thread.
                         unsafe {
                             menu_bar::apply_alert_level_raw(sip.as_ptr(), &alert_level, mtm);
-                            let handler_ref =
-                                handler_opt.map(|ahp| &*ahp.as_ptr());
-                            let menu =
-                                SessionMenuBuilder::build_menu(mtm, &sessions, handler_ref, &language);
+                            let handler_ref = handler_opt.map(|ahp| &*ahp.as_ptr());
+                            let menu = SessionMenuBuilder::build_menu(
+                                mtm,
+                                &sessions,
+                                handler_ref,
+                                &language,
+                            );
                             menu_bar::set_menu_raw(sip.as_ptr(), &menu);
                         }
                     }
@@ -585,64 +599,56 @@ async fn run_background(services: BackgroundServices) {
     while let Some(cmd) = cmd_rx.recv().await {
         tracing::debug!(?cmd, "Received AppCommand");
         match cmd {
-            AppCommand::CreateSession { name } => {
-                match &session_manager {
-                    Some(mgr) => {
-                        if let Err(e) = mgr.create_and_attach(&name) {
-                            tracing::error!("Failed to create session '{name}': {e:#}");
-                        } else if let Some(ref logger) = cmd_event_logger {
-                            if let Err(e) = logger.log_session_created(&name) {
-                                tracing::warn!("Failed to log session creation: {e:#}");
-                            }
+            AppCommand::CreateSession { name } => match &session_manager {
+                Some(mgr) => {
+                    if let Err(e) = mgr.create_and_attach(&name) {
+                        tracing::error!("Failed to create session '{name}': {e:#}");
+                    } else if let Some(ref logger) = cmd_event_logger {
+                        if let Err(e) = logger.log_session_created(&name) {
+                            tracing::warn!("Failed to log session creation: {e:#}");
                         }
                     }
-                    None => tracing::warn!("CreateSession: tmux unavailable"),
                 }
-            }
-            AppCommand::AttachSession { name } => {
-                match &session_manager {
-                    Some(mgr) => {
-                        if let Err(e) = mgr.attach(&name) {
-                            tracing::error!("Failed to attach session '{name}': {e:#}");
+                None => tracing::warn!("CreateSession: tmux unavailable"),
+            },
+            AppCommand::AttachSession { name } => match &session_manager {
+                Some(mgr) => {
+                    if let Err(e) = mgr.attach(&name) {
+                        tracing::error!("Failed to attach session '{name}': {e:#}");
+                    }
+                }
+                None => tracing::warn!("AttachSession: tmux unavailable"),
+            },
+            AppCommand::KillSession { name } => match &session_manager {
+                Some(mgr) => {
+                    if let Err(e) = mgr.kill_session(&name) {
+                        tracing::error!("Failed to kill session '{name}': {e:#}");
+                    } else if let Some(ref logger) = cmd_event_logger {
+                        if let Err(e) = logger.log_session_destroyed(&name) {
+                            tracing::warn!("Failed to log session destruction: {e:#}");
                         }
                     }
-                    None => tracing::warn!("AttachSession: tmux unavailable"),
                 }
-            }
-            AppCommand::KillSession { name } => {
-                match &session_manager {
-                    Some(mgr) => {
-                        if let Err(e) = mgr.kill_session(&name) {
-                            tracing::error!("Failed to kill session '{name}': {e:#}");
-                        } else if let Some(ref logger) = cmd_event_logger {
-                            if let Err(e) = logger.log_session_destroyed(&name) {
-                                tracing::warn!("Failed to log session destruction: {e:#}");
-                            }
-                        }
+                None => tracing::warn!("KillSession: tmux unavailable"),
+            },
+            AppCommand::RenameSession { old_name, new_name } => match &session_manager {
+                Some(mgr) => {
+                    if let Err(e) = mgr.rename_session(&old_name, &new_name) {
+                        tracing::error!(
+                            "Failed to rename session '{old_name}' to '{new_name}': {e:#}"
+                        );
                     }
-                    None => tracing::warn!("KillSession: tmux unavailable"),
                 }
-            }
-            AppCommand::RenameSession { old_name, new_name } => {
-                match &session_manager {
-                    Some(mgr) => {
-                        if let Err(e) = mgr.rename_session(&old_name, &new_name) {
-                            tracing::error!("Failed to rename session '{old_name}' to '{new_name}': {e:#}");
-                        }
+                None => tracing::warn!("RenameSession: tmux unavailable"),
+            },
+            AppCommand::KillServer => match &session_manager {
+                Some(mgr) => {
+                    if let Err(e) = mgr.kill_server() {
+                        tracing::error!("Failed to kill server: {e:#}");
                     }
-                    None => tracing::warn!("RenameSession: tmux unavailable"),
                 }
-            }
-            AppCommand::KillServer => {
-                match &session_manager {
-                    Some(mgr) => {
-                        if let Err(e) = mgr.kill_server() {
-                            tracing::error!("Failed to kill server: {e:#}");
-                        }
-                    }
-                    None => tracing::warn!("KillServer: tmux unavailable"),
-                }
-            }
+                None => tracing::warn!("KillServer: tmux unavailable"),
+            },
             AppCommand::RestartServer => {
                 match &restart_service {
                     Some(svc) => {
@@ -653,9 +659,8 @@ async fn run_background(services: BackgroundServices) {
                         };
                         // Run on a blocking thread so std::thread::sleep inside
                         // execute_restart() does not block the Tokio runtime.
-                        let result = tokio::task::spawn_blocking(move || {
-                            svc.execute_restart(&lang)
-                        }).await;
+                        let result =
+                            tokio::task::spawn_blocking(move || svc.execute_restart(&lang)).await;
                         match result {
                             Ok(Err(e)) => tracing::error!("Safe restart failed: {e:#}"),
                             Err(e) => tracing::error!("Restart task panicked: {e}"),
@@ -663,13 +668,18 @@ async fn run_background(services: BackgroundServices) {
                         }
                     }
                     None => {
-                        tracing::warn!("RestartServer: SnapshotService unavailable, skipping restart");
+                        tracing::warn!(
+                            "RestartServer: SnapshotService unavailable, skipping restart"
+                        );
                     }
                 }
             }
             AppCommand::OpenSettings => {
                 let config_path = AppConfig::config_path();
-                match std::process::Command::new("open").arg(&config_path).status() {
+                match std::process::Command::new("open")
+                    .arg(&config_path)
+                    .status()
+                {
                     Ok(s) if s.success() => {
                         tracing::info!("Opened config file: {}", config_path.display());
                     }
@@ -749,9 +759,10 @@ fn handle_monitor_event(
         policy.evaluate(event.fd_percent)
     };
     if let Some(level) = fd_alert_opt {
-        if let Err(e) = services
-            .notification_service
-            .send_fd_alert(event.fd_percent, &level, &language)
+        if let Err(e) =
+            services
+                .notification_service
+                .send_fd_alert(event.fd_percent, &level, &language)
         {
             tracing::warn!("Failed to send fd alert notification: {e:#}");
         }
@@ -832,10 +843,11 @@ fn handle_monitor_event(
                     .map(|s| s.last_activity)
                     .unwrap_or(now))
                 / 60;
-            if let Err(e) = services
-                .notification_service
-                .send_inactivity_alert(session_name, mins.max(0) as u64, &language)
-            {
+            if let Err(e) = services.notification_service.send_inactivity_alert(
+                session_name,
+                mins.max(0) as u64,
+                &language,
+            ) {
                 tracing::warn!("Failed to send inactivity alert for '{session_name}': {e:#}");
             }
         }

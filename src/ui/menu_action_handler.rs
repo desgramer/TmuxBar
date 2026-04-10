@@ -3,13 +3,20 @@ use std::cell::RefCell;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
-use objc2_app_kit::{NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSAlert, NSMenuItem, NSTextField, NSView};
-use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSRect, NSPoint, NSSize, NSString};
+use objc2_app_kit::{
+    NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSMenuItem, NSTextField, NSView,
+};
+use objc2_foundation::{
+    MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+};
 use tokio::sync::mpsc;
 
 use crate::i18n::{self, Language};
 use crate::models::AppCommand;
-use crate::ui::session_menu::{TAG_KILL_SERVER, TAG_KILL_SESSION_BASE, TAG_NEW_SESSION, TAG_QUIT, TAG_RENAME_SESSION_BASE, TAG_SETTINGS};
+use crate::ui::session_menu::{
+    TAG_KILL_SERVER, TAG_KILL_SESSION_BASE, TAG_NEW_SESSION, TAG_QUIT, TAG_RENAME_SESSION_BASE,
+    TAG_SETTINGS,
+};
 
 // ---------------------------------------------------------------------------
 // Ivars
@@ -190,7 +197,11 @@ define_class!(
 
 impl MenuActionHandler {
     /// Create a new handler. Must be called on the main thread.
-    pub fn new(mtm: MainThreadMarker, cmd_tx: mpsc::Sender<AppCommand>, lang: Language) -> Retained<Self> {
+    pub fn new(
+        mtm: MainThreadMarker,
+        cmd_tx: mpsc::Sender<AppCommand>,
+        lang: Language,
+    ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(MenuActionHandlerIvars {
             cmd_tx,
             session_names: RefCell::new(Vec::new()),

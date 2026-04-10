@@ -36,9 +36,7 @@ impl MonitorConfig {
     /// If the thresholds are not in ascending order (`warn < elevated < crit`),
     /// defaults are used instead and a warning is logged.
     pub fn alert_config(&self) -> AlertConfig {
-        if self.fd_warn_pct < self.fd_elevated_pct
-            && self.fd_elevated_pct < self.fd_crit_pct
-        {
+        if self.fd_warn_pct < self.fd_elevated_pct && self.fd_elevated_pct < self.fd_crit_pct {
             AlertConfig {
                 warn_pct: self.fd_warn_pct,
                 elevated_pct: self.fd_elevated_pct,
@@ -183,8 +181,8 @@ impl AppConfig {
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read config file {}", path.display()))?;
 
-        let mut cfg: AppConfig =
-            toml::from_str(&raw).with_context(|| format!("failed to parse config file {}", path.display()))?;
+        let mut cfg: AppConfig = toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config file {}", path.display()))?;
 
         cfg.expand_tilde();
         Ok(cfg)

@@ -70,21 +70,30 @@ pub(crate) fn parse_sessions(output: &str) -> Result<Vec<RawSession>> {
         let created: i64 = match parts[1].parse() {
             Ok(v) => v,
             Err(_) => {
-                tracing::warn!("Skipping session '{name}': invalid created value '{}'", parts[1]);
+                tracing::warn!(
+                    "Skipping session '{name}': invalid created value '{}'",
+                    parts[1]
+                );
                 continue;
             }
         };
         let attached_clients: u32 = match parts[2].parse() {
             Ok(v) => v,
             Err(_) => {
-                tracing::warn!("Skipping session '{name}': invalid attached value '{}'", parts[2]);
+                tracing::warn!(
+                    "Skipping session '{name}': invalid attached value '{}'",
+                    parts[2]
+                );
                 continue;
             }
         };
         let activity: i64 = match parts[3].parse() {
             Ok(v) => v,
             Err(_) => {
-                tracing::warn!("Skipping session '{name}': invalid activity value '{}'", parts[3]);
+                tracing::warn!(
+                    "Skipping session '{name}': invalid activity value '{}'",
+                    parts[3]
+                );
                 continue;
             }
         };
@@ -213,13 +222,23 @@ impl TmuxAdapter for TmuxClient {
     /// Attaching is the terminal launcher's responsibility; this just checks presence.
     fn attach_session(&self, name: &str) -> Result<()> {
         self.run_tmux(&["has-session", "-t", name])
-            .with_context(|| format!("session '{}' does not exist or tmux server is not running", name))?;
+            .with_context(|| {
+                format!(
+                    "session '{}' does not exist or tmux server is not running",
+                    name
+                )
+            })?;
         Ok(())
     }
 
     fn session_activity(&self, session: &str) -> Result<i64> {
-        let output =
-            self.run_tmux(&["display-message", "-t", session, "-p", "#{session_activity}"])?;
+        let output = self.run_tmux(&[
+            "display-message",
+            "-t",
+            session,
+            "-p",
+            "#{session_activity}",
+        ])?;
         output
             .trim()
             .parse::<i64>()
@@ -294,7 +313,8 @@ mod tests {
 
     #[test]
     fn test_parse_sessions_whitespace_only() {
-        let sessions = parse_sessions("   \n  \n").expect("whitespace-only should return empty vec");
+        let sessions =
+            parse_sessions("   \n  \n").expect("whitespace-only should return empty vec");
         assert!(sessions.is_empty());
     }
 
@@ -372,8 +392,7 @@ mod tests {
 
     #[test]
     fn test_parse_panes_valid() {
-        let output =
-            "0\t12345\t/home/user/project\tnvim\n1\t12346\t/home/user\tbash\n";
+        let output = "0\t12345\t/home/user/project\tnvim\n1\t12346\t/home/user\tbash\n";
         let panes = parse_panes(output).expect("should parse");
         assert_eq!(panes.len(), 2);
 

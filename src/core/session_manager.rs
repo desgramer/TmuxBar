@@ -106,10 +106,7 @@ impl SessionManager {
         let windows = self.tmux.list_windows(session_name).ok()?;
         let first_window = windows.first()?;
         let window_index = first_window.index.to_string();
-        let panes = self
-            .tmux
-            .list_panes(session_name, &window_index)
-            .ok()?;
+        let panes = self.tmux.list_panes(session_name, &window_index).ok()?;
         let first_pane = panes.first()?;
         Some(first_pane.current_command.clone())
     }
@@ -125,23 +122,25 @@ impl SessionManager {
             // Ghostty -e takes the command and arguments as separate args.
             let result = Command::new("open")
                 .args([
-                    "-na", "Ghostty.app", "--args",
-                    "-e", &self.tmux_path, "attach", "-t", &safe_name,
+                    "-na",
+                    "Ghostty.app",
+                    "--args",
+                    "-e",
+                    &self.tmux_path,
+                    "attach",
+                    "-t",
+                    &safe_name,
                 ])
                 .status();
 
             match result {
                 Ok(s) if s.success() => return Ok(()),
                 Ok(s) => {
-                    tracing::warn!(
-                        "Ghostty exited with {s}, falling back to Terminal.app"
-                    );
+                    tracing::warn!("Ghostty exited with {s}, falling back to Terminal.app");
                     // Fall through to Terminal.app
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to launch Ghostty, falling back to Terminal.app: {e}"
-                    );
+                    tracing::warn!("Failed to launch Ghostty, falling back to Terminal.app: {e}");
                     // Fall through to Terminal.app
                 }
             }
@@ -191,11 +190,7 @@ mod tests {
     }
 
     impl MockTmux {
-        fn new(
-            sessions: Vec<RawSession>,
-            windows: Vec<RawWindow>,
-            panes: Vec<RawPane>,
-        ) -> Self {
+        fn new(sessions: Vec<RawSession>, windows: Vec<RawWindow>, panes: Vec<RawPane>) -> Self {
             Self {
                 sessions,
                 windows,
@@ -259,10 +254,18 @@ mod tests {
             Ok(0)
         }
 
-        fn new_window(&self, _session: &str, _name: &str) -> anyhow::Result<()> { Ok(()) }
-        fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> { Ok(()) }
-        fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> { Ok(()) }
-        fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> { Ok(()) }
+        fn new_window(&self, _session: &str, _name: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
         fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
             Ok("0".to_string())
         }
