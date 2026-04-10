@@ -21,27 +21,27 @@ cargo fmt -- --check           # format check
 
 ## Architecture (3-layer)
 
-**App Bootstrap** (`src/app.rs`) — Application startup, Tokio runtime + AppKit bridging, main event loop. `src/models.rs` defines shared data types (sessions, events, config structs).
+**App Bootstrap** (`src/app.rs`) — Application startup, Tokio runtime + AppKit bridging, main event loop. `src/models.rs` defines shared data types (sessions, events, config structs). `src/i18n.rs` provides `Language` enum (Ko/En/Ja/Zh) and all UI string translations.
 
 **UI Layer** (`src/ui/`) — AppKit via `objc2`/`objc2-app-kit`:
 - `MenuBarApp` — NSStatusItem (menu bar icon with coloured Unicode glyphs per alert level)
 - `SessionMenuBuilder` — NSMenu (session list with uptime/stats), accepts optional `MenuActionHandler`
-- `MenuActionHandler` — ObjC class via `define_class!` macro; routes NSMenuItem clicks to `AppCommand` via `tokio::sync::mpsc`. Uses target/action pattern with `menuItemClicked:` selector. Tags 0–999 for sessions, 1000+ for fixed actions.
-- `NotificationService` — notifications via `osascript` (graceful degradation)
+- `MenuActionHandler` — ObjC class via `define_class!` macro; routes NSMenuItem clicks to `AppCommand` via `tokio::sync::mpsc`. Uses target/action pattern with `menuItemClicked:` selector. Tag scheme: 0–999 attach, 1000–1003 fixed actions, 2000–2999 kill, 3000–3999 rename. NSAlert dialogs for kill confirmation, session name input, and rename.
+- `NotificationService` — notifications via `osascript` (graceful degradation), all messages i18n-aware
 
 **Core Services** (`src/core/`) — Business logic, all testable without macOS UI:
-- `SessionManager` — CRUD sessions, spawn terminal (Ghostty → Terminal.app fallback). Uses `.status()` to prevent zombie processes.
+- `SessionManager` — CRUD + rename sessions, spawn terminal (Ghostty → Terminal.app fallback). Uses `.status()` to prevent zombie processes.
 - `MonitorService` — Tokio interval timer (default 3s). Reads fd usage + per-session CPU/RSS/uptime/foreground command, emits `MonitorEvent` to broadcast channel.
 - `FdAlertPolicy` — State machine for escalating fd notifications (85% warn, 90% elevated, 95%+ per-percent alerts). `evaluate()` has side effects, `current_level()` is pure.
-- `SnapshotService` — Serializes sessions to JSON (windows, panes, working dirs, layouts). Paths are single-quoted in `cd` commands during restore to handle spaces/special chars.
+- `SnapshotService` — Serializes sessions to JSON (windows, panes, working dirs, layouts). Paths are single-quoted in `cd` commands during restore to handle spaces/special chars. Restore queries `base-index` and `pane-base-index` from tmux for correct window/pane targeting.
 - `InactivityDetector` — Per-session last-activity tracking via `#{session_activity}`.
 - `EventLogger` — Structured events to SQLite (fd spikes, session create/destroy, restart phases).
 - `RestartService` — Orchestrates snapshot→kill→start→restore with per-phase logging. Runs via `spawn_blocking` to avoid blocking Tokio single-thread runtime.
 
 **Infrastructure Adapters** (`src/infra/`) — All external deps behind traits for testability:
-- `TmuxAdapter` trait / `TmuxClient` — wraps tmux CLI via `std::process::Command`. `parse_sessions()` skips malformed lines instead of failing entirely.
+- `TmuxAdapter` trait / `TmuxClient` — wraps tmux CLI via `std::process::Command`. `parse_sessions()` skips malformed lines instead of failing entirely. Includes `get_global_option` (tmux show-option) and `rename_session`.
 - `SystemProbe` trait / `SysProbe` — `sysctl` FFI for fd stats (kern.num_files/kern.maxfiles) with size validation and negative-value rejection. `sysinfo` crate for per-process CPU/RSS.
-- `Config` — TOML with hot-reload via `notify` crate. `detect_tmux_path()` searches `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin` and falls back to `"tmux"`. `expand_tilde()` resolves `~` in snapshot dir. `alert_config()` validates threshold ordering (warn < elevated < crit).
+- `Config` — TOML with hot-reload via `notify` crate. `detect_tmux_path()` searches `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin` and falls back to `"tmux"`. `expand_tilde()` resolves `~` in snapshot dir. `alert_config()` validates threshold ordering (warn < elevated < crit). `general.language` field (ko/en/ja/zh) controls UI language, hot-reloadable.
 - `LogStore` — SQLite WAL at `~/.local/share/tmuxbar/logs.db` with 5s `busy_timeout`
 - `ConfigWatcher` — File watcher with 500ms debounce for config hot-reload
 - `LaunchAgent` — Manages `~/Library/LaunchAgents/com.tmuxbar.plist` for login launch
@@ -74,17 +74,19 @@ cargo fmt -- --check           # format check
 
 ## Testing
 
-151 tests (+ 1 ignored), 0 clippy warnings. All core services are tested with mock adapters (MockTmux, MockSysProbe). UI tests are limited to formatting helpers since AppKit requires main thread + NSApplication event loop.
+171 tests (+ 1 ignored), 0 clippy warnings. All core services are tested with mock adapters (MockTmux, MockSysProbe). UI tests are limited to formatting helpers since AppKit requires main thread + NSApplication event loop.
 
 ```bash
 cargo test                                    # all tests
+cargo test i18n                               # i18n tests (15)
 cargo test core::fd_alert_policy              # state machine tests (21)
 cargo test infra::config                      # config round-trip tests (16)
+cargo test core::snapshot_service             # snapshot + base-index tests (10)
 cargo test core::restart_service              # restart flow tests (5)
 ```
 
 ## Known Limitations
 
-- Snapshot restore assumes tmux `base-index=0`. Non-zero base-index causes window target mismatch during restore.
-- Settings menu item is wired but handler is a no-op (logs only).
+- NSMenu does not update while open — user must close and reopen to see latest session state.
 - "Restart now" button in notifications not possible via osascript — restart is triggered from menu instead.
+- No .app bundle yet — runs as raw binary. LaunchAgent plist points to debug build path.
