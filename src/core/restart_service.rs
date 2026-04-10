@@ -309,6 +309,9 @@ mod tests {
         fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
             Ok("0".to_string())
         }
+        fn rename_session(&self, _old_name: &str, _new_name: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -392,6 +395,7 @@ mod tests {
             fn get_global_option(&self, _: &str) -> anyhow::Result<String> {
                 Ok("0".to_string())
             }
+            fn rename_session(&self, _: &str, _: &str) -> anyhow::Result<()> { Ok(()) }
         }
 
         let tmux: Arc<dyn TmuxAdapter> = Arc::new(FailListSessions);

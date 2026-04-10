@@ -92,6 +92,11 @@ impl SessionManager {
         self.tmux.kill_server()
     }
 
+    /// Rename a tmux session.
+    pub fn rename_session(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.tmux.rename_session(old_name, new_name)
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
@@ -260,6 +265,10 @@ mod tests {
         fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> { Ok(()) }
         fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
             Ok("0".to_string())
+        }
+        fn rename_session(&self, old_name: &str, new_name: &str) -> anyhow::Result<()> {
+            self.record(&format!("rename_session:{old_name}:{new_name}"));
+            Ok(())
         }
     }
 

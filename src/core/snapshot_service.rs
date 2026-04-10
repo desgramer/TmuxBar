@@ -368,6 +368,11 @@ mod tests {
                 _ => Ok("0".to_string()),
             }
         }
+
+        fn rename_session(&self, old_name: &str, new_name: &str) -> Result<()> {
+            self.record(format!("rename_session:{old_name}:{new_name}"));
+            Ok(())
+        }
     }
 
     // -----------------------------------------------------------------------

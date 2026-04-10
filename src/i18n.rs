@@ -116,6 +116,69 @@ pub fn alert_confirm_kill(lang: &Language) -> &'static str {
     }
 }
 
+pub fn alert_new_session_title(lang: &Language) -> &'static str {
+    match lang {
+        Language::Ko => "새 세션",
+        Language::En => "New Session",
+        Language::Ja => "新しいセッション",
+        Language::Zh => "新建会话",
+    }
+}
+
+pub fn alert_new_session_message(lang: &Language) -> &'static str {
+    match lang {
+        Language::Ko => "세션 이름을 입력하세요",
+        Language::En => "Enter session name",
+        Language::Ja => "セッション名を入力してください",
+        Language::Zh => "请输入会话名称",
+    }
+}
+
+pub fn alert_create(lang: &Language) -> &'static str {
+    match lang {
+        Language::Ko => "생성",
+        Language::En => "Create",
+        Language::Ja => "作成",
+        Language::Zh => "创建",
+    }
+}
+
+pub fn menu_rename(lang: &Language) -> &'static str {
+    match lang {
+        Language::Ko => "이름 변경",
+        Language::En => "Rename",
+        Language::Ja => "名前変更",
+        Language::Zh => "重命名",
+    }
+}
+
+pub fn alert_rename_title(lang: &Language) -> &'static str {
+    match lang {
+        Language::Ko => "세션 이름 변경",
+        Language::En => "Rename Session",
+        Language::Ja => "セッション名変更",
+        Language::Zh => "重命名会话",
+    }
+}
+
+pub fn alert_rename_message(lang: &Language, name: &str) -> String {
+    match lang {
+        Language::Ko => format!("'{}' 세션의 새 이름을 입력하세요", name),
+        Language::En => format!("Enter new name for session '{}'", name),
+        Language::Ja => format!("セッション '{}' の新しい名前を入力してください", name),
+        Language::Zh => format!("请输入会话 '{}' 的新名称", name),
+    }
+}
+
+pub fn alert_rename_confirm(lang: &Language) -> &'static str {
+    match lang {
+        Language::Ko => "변경",
+        Language::En => "Rename",
+        Language::Ja => "変更",
+        Language::Zh => "重命名",
+    }
+}
+
 // ── Notification strings ──────────────────────────────────────────────────────
 
 pub fn notif_fd_title(lang: &Language) -> &'static str {
@@ -270,6 +333,7 @@ mod tests {
             assert!(!menu_kill_server(&lang).is_empty());
             assert!(!menu_settings(&lang).is_empty());
             assert!(!menu_quit(&lang).is_empty());
+            assert!(!menu_rename(&lang).is_empty());
         }
     }
 
@@ -280,6 +344,21 @@ mod tests {
             assert!(!alert_kill_title(&lang).is_empty());
             assert!(!alert_cancel(&lang).is_empty());
             assert!(!alert_confirm_kill(&lang).is_empty());
+            assert!(!alert_new_session_title(&lang).is_empty());
+            assert!(!alert_new_session_message(&lang).is_empty());
+            assert!(!alert_create(&lang).is_empty());
+            assert!(!alert_rename_title(&lang).is_empty());
+            assert!(!alert_rename_confirm(&lang).is_empty());
+        }
+    }
+
+    // alert_rename_message contains session name
+    #[test]
+    fn alert_rename_message_contains_name() {
+        let name = "my-session";
+        for lang in [Language::Ko, Language::En, Language::Ja, Language::Zh] {
+            let s = alert_rename_message(&lang, name);
+            assert!(s.contains(name), "lang={lang:?} missing name in: {s}");
         }
     }
 

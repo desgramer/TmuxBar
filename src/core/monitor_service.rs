@@ -254,6 +254,9 @@ mod tests {
         fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
             Ok("0".to_string())
         }
+        fn rename_session(&self, _old_name: &str, _new_name: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -623,6 +623,16 @@ async fn run_background(services: BackgroundServices) {
                     None => tracing::warn!("KillSession: tmux unavailable"),
                 }
             }
+            AppCommand::RenameSession { old_name, new_name } => {
+                match &session_manager {
+                    Some(mgr) => {
+                        if let Err(e) = mgr.rename_session(&old_name, &new_name) {
+                            tracing::error!("Failed to rename session '{old_name}' to '{new_name}': {e:#}");
+                        }
+                    }
+                    None => tracing::warn!("RenameSession: tmux unavailable"),
+                }
+            }
             AppCommand::KillServer => {
                 match &session_manager {
                     Some(mgr) => {

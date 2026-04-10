@@ -250,6 +250,11 @@ impl TmuxAdapter for TmuxClient {
     fn get_global_option(&self, name: &str) -> Result<String> {
         self.run_tmux(&["show-option", "-gv", name])
     }
+
+    fn rename_session(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.run_tmux(&["rename-session", "-t", old_name, new_name])?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,8 @@ pub const TAG_SETTINGS: isize = 1002;
 pub const TAG_QUIT: isize = 1003;
 /// Tags 2000..2999 are reserved for session kill items.
 pub const TAG_KILL_SESSION_BASE: isize = 2000;
+/// Tags 3000..3999 are reserved for session rename items.
+pub const TAG_RENAME_SESSION_BASE: isize = 3000;
 
 // ---------------------------------------------------------------------------
 // SessionMenuBuilder
@@ -77,6 +79,10 @@ impl SessionMenuBuilder {
             let attach_item = make_item(mtm, i18n::menu_attach(lang), handler);
             attach_item.setTag(idx as isize);
             submenu.addItem(&attach_item);
+
+            let rename_item = make_item(mtm, i18n::menu_rename(lang), handler);
+            rename_item.setTag(TAG_RENAME_SESSION_BASE + idx as isize);
+            submenu.addItem(&rename_item);
 
             let kill_item = make_item(mtm, i18n::menu_kill_session(lang), handler);
             kill_item.setTag(TAG_KILL_SESSION_BASE + idx as isize);
@@ -328,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_tag_constants_are_distinct() {
-        let tags = [TAG_NEW_SESSION, TAG_KILL_SERVER, TAG_SETTINGS, TAG_QUIT, TAG_KILL_SESSION_BASE];
+        let tags = [TAG_NEW_SESSION, TAG_KILL_SERVER, TAG_SETTINGS, TAG_QUIT, TAG_KILL_SESSION_BASE, TAG_RENAME_SESSION_BASE];
         for (i, a) in tags.iter().enumerate() {
             for (j, b) in tags.iter().enumerate() {
                 if i != j {
@@ -351,5 +357,11 @@ mod tests {
     fn test_kill_session_tag_range_does_not_overlap() {
         assert!(TAG_KILL_SESSION_BASE >= 2000);
         assert!(TAG_NEW_SESSION < TAG_KILL_SESSION_BASE);
+    }
+
+    #[test]
+    fn test_rename_session_tag_range_does_not_overlap() {
+        assert!(TAG_RENAME_SESSION_BASE >= 3000);
+        assert!(TAG_KILL_SESSION_BASE < TAG_RENAME_SESSION_BASE);
     }
 }
