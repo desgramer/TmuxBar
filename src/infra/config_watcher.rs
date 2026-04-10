@@ -314,15 +314,19 @@ fd_warn_pct = 70
         })
         .expect("start watcher");
 
-        // Give the watcher a moment to initialise.
-        std::thread::sleep(Duration::from_millis(200));
+        // Give the watcher time to initialise and let any initial-write event
+        // pass through the debounce window (500ms) before writing the update.
+        std::thread::sleep(Duration::from_millis(1000));
+
+        // Reset flag so we only detect the second write.
+        fired.store(false, Ordering::SeqCst);
 
         // Write new config.
         std::fs::write(&config_path, "[monitor]\npoll_interval_secs = 42\n")
             .expect("write updated config");
 
-        // Wait up to 3 s for the callback to fire.
-        let deadline = Instant::now() + Duration::from_secs(3);
+        // Wait up to 5 s for the callback to fire.
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !fired.load(Ordering::SeqCst) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
         }
