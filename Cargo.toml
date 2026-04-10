@@ -2,6 +2,10 @@
 name = "tmuxbar"
 version = "0.1.0"
 edition = "2021"
+description = "macOS menu bar app for tmux session management"
+license = "MIT"
+repository = "https://github.com/desgramer/TmuxBar"
+readme = "README.md"
 
 [dependencies]
 objc2 = "0.6"
