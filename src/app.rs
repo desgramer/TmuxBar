@@ -497,13 +497,18 @@ pub fn run() {
     }
 
     // Spawn a timer thread that periodically dispatches UI refreshes to the
-    // main thread. The actual icon/menu updates happen on the main thread via
-    // GCD dispatch.
+    // main thread. Only dispatches when data has actually changed, to avoid
+    // unnecessary NSStatusItem updates that can interfere with menu bar
+    // managers like Bartender.
     let ui_state = Arc::clone(&shared_state);
     let cmd_tx_for_timer = cmd_tx.clone();
     std::thread::spawn(move || {
+        // Track previous state to skip no-op updates.
+        let mut prev_alert_level = AlertLevel::Normal;
+        let mut prev_session_fingerprint = String::new();
+        let mut prev_language = Language::default();
+
         loop {
-            // Check shutdown before sleeping so we don't do work after close.
             if cmd_tx_for_timer.is_closed() {
                 break;
             }
@@ -522,21 +527,52 @@ pub fn run() {
             let handler_opt = state.action_handler_ptr;
             drop(state);
 
+            // Build a lightweight fingerprint of session data to detect changes
+            // without cloning the full menu each tick.
+            let session_fingerprint = sessions
+                .iter()
+                .map(|s| {
+                    let stats_str = s
+                        .stats
+                        .as_ref()
+                        .map(|st| format!("{:.0}/{}", st.cpu_percent, st.memory_bytes))
+                        .unwrap_or_default();
+                    format!("{}:{}:{}", s.name, s.foreground_command, stats_str)
+                })
+                .collect::<Vec<_>>()
+                .join("|");
+
+            let icon_changed = alert_level != prev_alert_level;
+            let menu_changed =
+                session_fingerprint != prev_session_fingerprint || language != prev_language;
+
+            if !icon_changed && !menu_changed {
+                continue;
+            }
+
+            prev_alert_level = alert_level.clone();
+            prev_session_fingerprint = session_fingerprint;
+            prev_language = language;
+
             if let Some(sip) = ptr_opt {
                 dispatch2::DispatchQueue::main().exec_async(move || {
                     if let Some(mtm) = MainThreadMarker::new() {
                         // SAFETY: sip/ahp pointers are valid for the lifetime of
                         // the NSApplication run loop and we are on the main thread.
                         unsafe {
-                            menu_bar::apply_alert_level_raw(sip.as_ptr(), &alert_level, mtm);
-                            let handler_ref = handler_opt.map(|ahp| &*ahp.as_ptr());
-                            let menu = SessionMenuBuilder::build_menu(
-                                mtm,
-                                &sessions,
-                                handler_ref,
-                                &language,
-                            );
-                            menu_bar::set_menu_raw(sip.as_ptr(), &menu);
+                            if icon_changed {
+                                menu_bar::apply_alert_level_raw(sip.as_ptr(), &alert_level, mtm);
+                            }
+                            if menu_changed {
+                                let handler_ref = handler_opt.map(|ahp| &*ahp.as_ptr());
+                                let menu = SessionMenuBuilder::build_menu(
+                                    mtm,
+                                    &sessions,
+                                    handler_ref,
+                                    &language,
+                                );
+                                menu_bar::set_menu_raw(sip.as_ptr(), &menu);
+                            }
                         }
                     }
                 });
