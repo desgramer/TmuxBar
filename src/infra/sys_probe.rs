@@ -30,6 +30,13 @@ fn sysctl_by_name(name: &CStr) -> anyhow::Result<i32> {
             std::io::Error::last_os_error()
         );
     }
+    if size != mem::size_of::<i32>() {
+        anyhow::bail!(
+            "sysctlbyname({}) returned unexpected size {size} (expected {})",
+            name.to_str().unwrap_or("?"),
+            mem::size_of::<i32>(),
+        );
+    }
     Ok(value)
 }
 
@@ -66,6 +73,11 @@ impl SystemProbe for MacSysProbe {
     fn fd_usage(&self) -> anyhow::Result<(u64, u64)> {
         let current = sysctl_by_name(c"kern.num_files")?;
         let max = sysctl_by_name(c"kern.maxfiles")?;
+        if current < 0 || max <= 0 {
+            anyhow::bail!(
+                "sysctl returned invalid fd values: current={current}, max={max}"
+            );
+        }
         Ok((current as u64, max as u64))
     }
 
@@ -75,7 +87,9 @@ impl SystemProbe for MacSysProbe {
     /// which is why we hold the `System` instance for reuse.
     fn process_stats(&self, pid: u32) -> anyhow::Result<ProcStats> {
         let sysinfo_pid = Pid::from(pid as usize);
-        let mut sys = self.system.lock().expect("sysinfo mutex poisoned");
+        let mut sys = self.system.lock().map_err(|e| {
+            anyhow::anyhow!("sysinfo mutex poisoned: {e}")
+        })?;
 
         // Refresh only the target process for efficiency.
         sys.refresh_processes_specifics(

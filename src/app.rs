@@ -221,7 +221,9 @@ pub fn run() {
                 "Failed to load config from {}: {e:#}. Using defaults.",
                 path.display()
             );
-            AppConfig::default()
+            let mut cfg = AppConfig::default();
+            cfg.expand_tilde();
+            cfg
         }
     };
 
@@ -360,15 +362,21 @@ pub fn run() {
             tracing::info!("Config reloaded");
 
             // Update FdAlertPolicy thresholds and reset state.
-            {
-                let mut policy = watcher_fd_policy.lock().unwrap();
-                policy.update_config(new_cfg.monitor.alert_config());
+            match watcher_fd_policy.lock() {
+                Ok(mut policy) => policy.update_config(new_cfg.monitor.alert_config()),
+                Err(e) => {
+                    tracing::error!("FdAlertPolicy mutex poisoned on config reload: {e}");
+                    return;
+                }
             }
 
             // Update InactivityDetector timeout.
-            {
-                let mut detector = watcher_inactivity.lock().unwrap();
-                detector.update_timeout(new_cfg.monitor.inactivity_timeout_mins * 60);
+            match watcher_inactivity.lock() {
+                Ok(mut detector) => detector.update_timeout(new_cfg.monitor.inactivity_timeout_mins * 60),
+                Err(e) => {
+                    tracing::error!("InactivityDetector mutex poisoned on config reload: {e}");
+                    return;
+                }
             }
 
             // Sync LaunchAgent with the new launch_at_login setting.
@@ -632,7 +640,13 @@ fn handle_monitor_event(
 ) {
     // 1. Evaluate fd alert policy (lock only for the duration of the call).
     let fd_alert_opt = {
-        let mut policy = services.fd_alert_policy.lock().unwrap();
+        let mut policy = match services.fd_alert_policy.lock() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("FdAlertPolicy mutex poisoned: {e}");
+                return;
+            }
+        };
         policy.evaluate(event.fd_percent)
     };
     if let Some(level) = fd_alert_opt {
@@ -646,7 +660,13 @@ fn handle_monitor_event(
 
     // 2. Update shared state
     let alert_level = {
-        let policy = services.fd_alert_policy.lock().unwrap();
+        let policy = match services.fd_alert_policy.lock() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("FdAlertPolicy mutex poisoned: {e}");
+                return;
+            }
+        };
         policy.current_level(event.fd_percent)
     };
     let sessions: Vec<Session> = event
@@ -689,7 +709,13 @@ fn handle_monitor_event(
     // 4. Check inactivity — only notify once per session until it becomes active again.
     let now = chrono::Utc::now().timestamp();
     let idle_sessions = {
-        let detector = services.inactivity_detector.lock().unwrap();
+        let detector = match services.inactivity_detector.lock() {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("InactivityDetector mutex poisoned: {e}");
+                return;
+            }
+        };
         detector.check_inactive(&event.sessions, now)
     };
     for session_name in &idle_sessions {

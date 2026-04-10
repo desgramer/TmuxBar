@@ -121,10 +121,16 @@ impl SessionManager {
             let cmd = format!("{} attach -t {}", self.tmux_path, safe_name);
             let result = Command::new("open")
                 .args(["-na", "Ghostty.app", "--args", "-e", &cmd])
-                .spawn();
+                .status(); // .status() waits for completion, preventing zombie
 
             match result {
-                Ok(_) => return Ok(()),
+                Ok(s) if s.success() => return Ok(()),
+                Ok(s) => {
+                    tracing::warn!(
+                        "Ghostty exited with {s}, falling back to Terminal.app"
+                    );
+                    // Fall through to Terminal.app
+                }
                 Err(e) => {
                     tracing::warn!(
                         "Failed to launch Ghostty, falling back to Terminal.app: {e}"
@@ -135,7 +141,8 @@ impl SessionManager {
         }
 
         // Terminal.app (default / fallback)
-        Command::new("osascript")
+        // Use .status() to wait for osascript to complete and avoid zombie processes.
+        let status = Command::new("osascript")
             .args([
                 "-e",
                 &format!(
@@ -143,7 +150,11 @@ impl SessionManager {
                     self.tmux_path, safe_name
                 ),
             ])
-            .spawn()?;
+            .status()?;
+
+        if !status.success() {
+            tracing::warn!("osascript exited with {status}");
+        }
 
         Ok(())
     }

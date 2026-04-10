@@ -32,11 +32,27 @@ impl Default for MonitorConfig {
 
 impl MonitorConfig {
     /// Convert the fd thresholds into an `AlertConfig` used by MonitorService.
+    ///
+    /// If the thresholds are not in ascending order (`warn < elevated < crit`),
+    /// defaults are used instead and a warning is logged.
     pub fn alert_config(&self) -> AlertConfig {
-        AlertConfig {
-            warn_pct: self.fd_warn_pct,
-            elevated_pct: self.fd_elevated_pct,
-            crit_pct: self.fd_crit_pct,
+        if self.fd_warn_pct < self.fd_elevated_pct
+            && self.fd_elevated_pct < self.fd_crit_pct
+        {
+            AlertConfig {
+                warn_pct: self.fd_warn_pct,
+                elevated_pct: self.fd_elevated_pct,
+                crit_pct: self.fd_crit_pct,
+            }
+        } else {
+            tracing::warn!(
+                "Invalid alert thresholds (warn={}, elevated={}, crit={}); \
+                 must be warn < elevated < crit. Using defaults.",
+                self.fd_warn_pct,
+                self.fd_elevated_pct,
+                self.fd_crit_pct,
+            );
+            AlertConfig::default()
         }
     }
 }
@@ -182,7 +198,7 @@ impl AppConfig {
     }
 
     /// Expand a leading `~` in `snapshots.dir` to the real home directory.
-    fn expand_tilde(&mut self) {
+    pub(crate) fn expand_tilde(&mut self) {
         let dir = &self.snapshots.dir;
         if dir.starts_with("~/") || dir == "~" {
             if let Some(home) = dirs::home_dir() {
