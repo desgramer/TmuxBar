@@ -4,3 +4,6 @@
 *.swo
 *~
 .velorum/
+CLAUDE.md
+TMUXBAR_SPEC.md
+docs/superpowers/
