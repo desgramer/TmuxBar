@@ -106,27 +106,46 @@ impl SnapshotService {
     /// Recreates the session with all windows, panes, and working directories.
     /// For each window the panes are split, each pane receives a `cd` command,
     /// and the recorded tmux layout is applied.
+    ///
+    /// Respects `base-index` and `pane-base-index` tmux options so that window
+    /// and pane targets are correct even when the user has non-zero base indices.
     pub fn restore_session(&self, snapshot: &SessionSnapshot) -> Result<()> {
+        // Query tmux base indices for correct window/pane targeting.
+        let base_index: u32 = self
+            .tmux
+            .get_global_option("base-index")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let pane_base_index: u32 = self
+            .tmux
+            .get_global_option("pane-base-index")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+
         self.tmux.new_session(&snapshot.name)?;
 
-        for (window_idx, window) in snapshot.windows.iter().enumerate() {
+        for (window_enum_idx, window) in snapshot.windows.iter().enumerate() {
+            let window_idx = base_index + window_enum_idx as u32;
+
             // The first window is created automatically with new_session; only
             // create explicit new windows for index 1+.
-            if window_idx > 0 {
+            if window_enum_idx > 0 {
                 self.tmux.new_window(&snapshot.name, &window.name)?;
             }
 
             let window_idx_str = window_idx.to_string();
 
-            // Split additional panes (pane 0 exists already for every window).
-            for pane_idx in 1..window.panes.len() {
-                let _ = pane_idx; // index only used for count
+            // Split additional panes (pane at pane_base_index exists already).
+            for _ in 1..window.panes.len() {
                 self.tmux.split_window(&snapshot.name, &window_idx_str)?;
             }
 
             // Send each pane to its recorded working directory.
-            for pane in &window.panes {
-                let target = format!("{}:{}.{}", snapshot.name, window_idx, pane.index);
+            for (pane_enum_idx, pane) in window.panes.iter().enumerate() {
+                let pane_idx = pane_base_index + pane_enum_idx as u32;
+                let target = format!("{}:{}.{}", snapshot.name, window_idx, pane_idx);
                 let escaped_dir = pane.working_dir.replace('\'', "'\\''");
                 self.tmux
                     .send_keys(&target, &format!("cd '{escaped_dir}'"))?;
@@ -230,6 +249,8 @@ mod tests {
         windows: Vec<RawWindow>,
         /// Simulates failure for sessions whose name is in this list.
         fail_sessions: Vec<String>,
+        base_index: String,
+        pane_base_index: String,
         calls: Mutex<Vec<String>>,
     }
 
@@ -244,12 +265,20 @@ mod tests {
                 windows,
                 panes,
                 fail_sessions: Vec::new(),
+                base_index: "0".to_string(),
+                pane_base_index: "0".to_string(),
                 calls: Mutex::new(Vec::new()),
             }
         }
 
         fn with_fail_sessions(mut self, names: Vec<&str>) -> Self {
             self.fail_sessions = names.iter().map(|s| s.to_string()).collect();
+            self
+        }
+
+        fn with_base_index(mut self, base: &str, pane_base: &str) -> Self {
+            self.base_index = base.to_string();
+            self.pane_base_index = pane_base.to_string();
             self
         }
 
@@ -333,7 +362,11 @@ mod tests {
 
         fn get_global_option(&self, name: &str) -> Result<String> {
             self.record(format!("get_global_option:{name}"));
-            Ok("0".to_string())
+            match name {
+                "base-index" => Ok(self.base_index.clone()),
+                "pane-base-index" => Ok(self.pane_base_index.clone()),
+                _ => Ok("0".to_string()),
+            }
         }
     }
 
@@ -656,5 +689,84 @@ mod tests {
         assert_eq!(report.restored, vec!["good"]);
         assert_eq!(report.failed.len(), 1);
         assert_eq!(report.failed[0].0, "broken");
+    }
+
+    // -----------------------------------------------------------------------
+    // restore_session — respects base-index=1
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_restore_session_with_base_index_one() {
+        let mock = Arc::new(
+            MockTmux::new(vec![], vec![], vec![])
+                .with_base_index("1", "0"),
+        );
+        let (svc, _tmp) = make_service(mock.clone());
+
+        let snapshot = SessionSnapshot {
+            name: "proj".to_string(),
+            windows: vec![
+                WindowSnapshot {
+                    name: "code".to_string(),
+                    layout: "main-vertical".to_string(),
+                    panes: vec![
+                        PaneSnapshot { working_dir: "/src".to_string(), index: 0 },
+                        PaneSnapshot { working_dir: "/test".to_string(), index: 1 },
+                    ],
+                },
+                WindowSnapshot {
+                    name: "logs".to_string(),
+                    layout: "even-horizontal".to_string(),
+                    panes: vec![
+                        PaneSnapshot { working_dir: "/var/log".to_string(), index: 0 },
+                    ],
+                },
+            ],
+        };
+
+        svc.restore_session(&snapshot).expect("restore should succeed");
+
+        let log = mock.call_log();
+
+        // Window indices should be 1, 2 (not 0, 1) due to base-index=1
+        assert!(log.contains(&"split_window:proj:1".to_string()), "split should target window 1: {log:?}");
+        assert!(log.contains(&"send_keys:proj:1.0:cd '/src'".to_string()), "pane target should use window 1: {log:?}");
+        assert!(log.contains(&"send_keys:proj:1.1:cd '/test'".to_string()), "{log:?}");
+        assert!(log.contains(&"send_keys:proj:2.0:cd '/var/log'".to_string()), "second window should be 2: {log:?}");
+        assert!(log.contains(&"select_layout:proj:1:main-vertical".to_string()), "{log:?}");
+        assert!(log.contains(&"select_layout:proj:2:even-horizontal".to_string()), "{log:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // restore_session — respects pane-base-index=1
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_restore_session_with_pane_base_index_one() {
+        let mock = Arc::new(
+            MockTmux::new(vec![], vec![], vec![])
+                .with_base_index("0", "1"),
+        );
+        let (svc, _tmp) = make_service(mock.clone());
+
+        let snapshot = SessionSnapshot {
+            name: "app".to_string(),
+            windows: vec![WindowSnapshot {
+                name: "main".to_string(),
+                layout: "tiled".to_string(),
+                panes: vec![
+                    PaneSnapshot { working_dir: "/a".to_string(), index: 0 },
+                    PaneSnapshot { working_dir: "/b".to_string(), index: 1 },
+                ],
+            }],
+        };
+
+        svc.restore_session(&snapshot).expect("restore should succeed");
+
+        let log = mock.call_log();
+
+        // Pane indices should be 1, 2 (not 0, 1) due to pane-base-index=1
+        assert!(log.contains(&"send_keys:app:0.1:cd '/a'".to_string()), "pane 0 should become index 1: {log:?}");
+        assert!(log.contains(&"send_keys:app:0.2:cd '/b'".to_string()), "pane 1 should become index 2: {log:?}");
     }
 }
