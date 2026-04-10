@@ -1,4 +1,4 @@
-// TODO: The osascript approach does not support interactive action buttons (e.g., "Restart
+// NOTE: The osascript approach does not support interactive action buttons (e.g., "Restart
 // now"). The "Restart now" functionality is triggered from the menu instead via
 // Kill Server → confirm → safe restart flow.
 
@@ -97,7 +97,7 @@ impl NotificationService {
     ///
     /// If osascript fails the error is logged as a warning and `Ok(())` is
     /// returned — notifications are best-effort and must never crash the app.
-    fn send_notification(&self, title: &str, subtitle: &str, message: &str) -> Result<()> {
+    pub(crate) fn send_notification(&self, title: &str, subtitle: &str, message: &str) -> Result<()> {
         // Escape any double-quotes that appear in user-controlled strings so
         // that the AppleScript string literals are not broken.
         let title_esc = title.replace('"', "\\\"");

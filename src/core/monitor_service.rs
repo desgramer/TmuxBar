@@ -81,12 +81,14 @@ impl MonitorService {
     }
 
     /// Collect per-session stats by walking windows → panes and aggregating
-    /// CPU% and RSS from each pane's process.
-    pub fn collect_session_stats(&self, session_name: &str) -> Result<SessionStats> {
+    /// CPU% and RSS from each pane's process. Also returns the foreground
+    /// command of the first pane in the first window.
+    pub fn collect_session_stats(&self, session_name: &str) -> Result<(SessionStats, String)> {
         let windows = self.tmux.list_windows(session_name)?;
 
         let mut total_cpu: f32 = 0.0;
         let mut total_mem: u64 = 0;
+        let mut foreground_command = String::new();
 
         for window in &windows {
             let panes = self
@@ -94,6 +96,11 @@ impl MonitorService {
                 .list_panes(session_name, &window.index.to_string())?;
 
             for pane in &panes {
+                // Capture the first pane's command as the foreground command.
+                if foreground_command.is_empty() {
+                    foreground_command = pane.current_command.clone();
+                }
+
                 match self.sys_probe.process_stats(pane.pid) {
                     Ok(stats) => {
                         total_cpu += stats.cpu_percent;
@@ -110,10 +117,13 @@ impl MonitorService {
             }
         }
 
-        Ok(SessionStats {
-            cpu_percent: total_cpu,
-            memory_bytes: total_mem,
-        })
+        Ok((
+            SessionStats {
+                cpu_percent: total_cpu,
+                memory_bytes: total_mem,
+            },
+            foreground_command,
+        ))
     }
 
     // -----------------------------------------------------------------------
@@ -137,11 +147,14 @@ impl MonitorService {
 
         for raw in &raw_sessions {
             match self.collect_session_stats(&raw.name) {
-                Ok(stats) => {
+                Ok((stats, fg_cmd)) => {
                     sessions.push(SessionStatus {
                         name: raw.name.clone(),
                         stats,
                         last_activity: raw.activity,
+                        created: raw.created,
+                        attached_clients: raw.attached_clients,
+                        foreground_command: fg_cmd,
                     });
                 }
                 Err(e) => {
@@ -304,11 +317,13 @@ mod tests {
         let sys = Arc::new(MockSysProbe::new(0, 0, 10.0, 1024));
         let (svc, _rx) = make_service(tmux, sys);
 
-        let stats = svc.collect_session_stats("test").unwrap();
+        let (stats, fg_cmd) = svc.collect_session_stats("test").unwrap();
 
         // 2 windows x 2 panes each = 4 panes total
         assert!((stats.cpu_percent - 40.0).abs() < 0.01);
         assert_eq!(stats.memory_bytes, 4096);
+        // First pane's command
+        assert_eq!(fg_cmd, "sh");
     }
 
     #[test]
@@ -321,10 +336,11 @@ mod tests {
         let sys = Arc::new(MockSysProbe::new(0, 0, 99.0, 9999));
         let (svc, _rx) = make_service(tmux, sys);
 
-        let stats = svc.collect_session_stats("empty").unwrap();
+        let (stats, fg_cmd) = svc.collect_session_stats("empty").unwrap();
 
         assert!((stats.cpu_percent - 0.0).abs() < 0.01);
         assert_eq!(stats.memory_bytes, 0);
+        assert!(fg_cmd.is_empty());
     }
 
     // -----------------------------------------------------------------------

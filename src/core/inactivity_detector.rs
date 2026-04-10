@@ -60,6 +60,9 @@ mod tests {
                 memory_bytes: 0,
             },
             last_activity,
+            created: 0,
+            attached_clients: 0,
+            foreground_command: String::new(),
         }
     }
 

@@ -40,6 +40,9 @@ impl LogStore {
         // Enable WAL journal mode.
         conn.pragma_update(None, "journal_mode", "WAL")?;
 
+        // Set busy timeout so concurrent writers retry instead of failing immediately.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+
         // Create the events table.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS events (

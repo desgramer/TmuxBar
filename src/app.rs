@@ -133,6 +133,9 @@ struct BackgroundServices {
     session_manager: Option<SessionManager>,
     restart_service: Option<Arc<RestartService>>,
     event_services: EventServices,
+    /// Separate EventLogger for command-initiated events (session create/destroy).
+    /// `None` when the log store failed to open.
+    cmd_event_logger: Option<EventLogger>,
     cmd_rx: mpsc::Receiver<AppCommand>,
     shared_state: Arc<Mutex<AppState>>,
 }
@@ -235,6 +238,27 @@ pub fn run() {
     }
 
     // ------------------------------------------------------------------
+    // c2. Ghostty first-use notification (spec §1.6)
+    // ------------------------------------------------------------------
+    if config.terminal.app.eq_ignore_ascii_case("ghostty") {
+        let marker = AppConfig::config_path()
+            .parent()
+            .map(|p| p.join(".ghostty_notified"));
+        if let Some(ref marker_path) = marker {
+            if !marker_path.exists() {
+                let ns = NotificationService::new();
+                let _ = ns.send_notification(
+                    "TmuxBar",
+                    "Ghostty Setup",
+                    "First time using Ghostty with TmuxBar. \
+                     macOS may show a security dialog when opening Ghostty — please allow it.",
+                );
+                let _ = std::fs::write(marker_path, "");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // d. Create infrastructure adapters
     // ------------------------------------------------------------------
     let tmux_available = check_tmux_available(&config.terminal.tmux_path);
@@ -334,6 +358,15 @@ pub fn run() {
     // ------------------------------------------------------------------
     // f. Spawn Tokio runtime on background thread
     // ------------------------------------------------------------------
+    // Third EventLogger connection for command-initiated events.
+    let cmd_event_logger = match LogStore::new(&LogStore::default_path()) {
+        Ok(s) => Some(EventLogger::new(s)),
+        Err(e) => {
+            tracing::warn!("Command EventLogger: failed to open log store: {e:#}");
+            None
+        }
+    };
+
     let bg_services = BackgroundServices {
         monitor_service: monitor_service_opt,
         monitor_rx: monitor_rx_opt,
@@ -347,6 +380,7 @@ pub fn run() {
             last_logged_fd_pct: None,
             notified_inactive_sessions: HashSet::new(),
         },
+        cmd_event_logger,
         cmd_rx,
         shared_state: Arc::clone(&shared_state),
     };
@@ -440,9 +474,13 @@ pub fn run() {
     let cmd_tx_for_timer = cmd_tx.clone();
     std::thread::spawn(move || {
         loop {
+            // Check shutdown before sleeping so we don't do work after close.
+            if cmd_tx_for_timer.is_closed() {
+                break;
+            }
+
             std::thread::sleep(std::time::Duration::from_secs(3));
 
-            // Check if the app is still running before doing work.
             if cmd_tx_for_timer.is_closed() {
                 break;
             }
@@ -502,6 +540,7 @@ async fn run_background(services: BackgroundServices) {
         session_manager,
         restart_service,
         event_services,
+        cmd_event_logger,
         mut cmd_rx,
         shared_state,
     } = services;
@@ -532,6 +571,10 @@ async fn run_background(services: BackgroundServices) {
                     Some(mgr) => {
                         if let Err(e) = mgr.create_and_attach(&name) {
                             tracing::error!("Failed to create session '{name}': {e:#}");
+                        } else if let Some(ref logger) = cmd_event_logger {
+                            if let Err(e) = logger.log_session_created(&name) {
+                                tracing::warn!("Failed to log session creation: {e:#}");
+                            }
                         }
                     }
                     None => tracing::warn!("CreateSession: tmux unavailable"),
@@ -552,6 +595,10 @@ async fn run_background(services: BackgroundServices) {
                     Some(mgr) => {
                         if let Err(e) = mgr.kill_session(&name) {
                             tracing::error!("Failed to kill session '{name}': {e:#}");
+                        } else if let Some(ref logger) = cmd_event_logger {
+                            if let Err(e) = logger.log_session_destroyed(&name) {
+                                tracing::warn!("Failed to log session destruction: {e:#}");
+                            }
                         }
                     }
                     None => tracing::warn!("KillSession: tmux unavailable"),
@@ -669,14 +716,15 @@ fn handle_monitor_event(
         };
         policy.current_level(event.fd_percent)
     };
+    let now_ts = chrono::Utc::now().timestamp();
     let sessions: Vec<Session> = event
         .sessions
         .iter()
         .map(|s| Session {
             name: s.name.clone(),
-            uptime: chrono::Duration::seconds(0), // simplified; full uptime needs created timestamp
-            foreground_command: String::new(),
-            attached_clients: 0,
+            uptime: chrono::Duration::seconds((now_ts - s.created).max(0)),
+            foreground_command: s.foreground_command.clone(),
+            attached_clients: s.attached_clients,
             stats: Some(s.stats.clone()),
         })
         .collect();

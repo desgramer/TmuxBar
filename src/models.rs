@@ -127,6 +127,12 @@ pub struct SessionStatus {
     pub name: String,
     pub stats: SessionStats,
     pub last_activity: i64,
+    /// Unix epoch seconds when the session was created — used to compute uptime.
+    pub created: i64,
+    /// Number of clients currently attached to this session.
+    pub attached_clients: u32,
+    /// The command running in the first pane of the first window.
+    pub foreground_command: String,
 }
 
 // ---------------------------------------------------------------------------
