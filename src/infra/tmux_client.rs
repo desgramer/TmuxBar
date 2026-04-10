@@ -67,15 +67,27 @@ pub(crate) fn parse_sessions(output: &str) -> Result<Vec<RawSession>> {
             continue;
         }
         let name = parts[0].to_string();
-        let created: i64 = parts[1]
-            .parse()
-            .with_context(|| format!("invalid session_created value '{}'", parts[1]))?;
-        let attached_clients: u32 = parts[2]
-            .parse()
-            .with_context(|| format!("invalid session_attached value '{}'", parts[2]))?;
-        let activity: i64 = parts[3]
-            .parse()
-            .with_context(|| format!("invalid session_activity value '{}'", parts[3]))?;
+        let created: i64 = match parts[1].parse() {
+            Ok(v) => v,
+            Err(_) => {
+                tracing::warn!("Skipping session '{name}': invalid created value '{}'", parts[1]);
+                continue;
+            }
+        };
+        let attached_clients: u32 = match parts[2].parse() {
+            Ok(v) => v,
+            Err(_) => {
+                tracing::warn!("Skipping session '{name}': invalid attached value '{}'", parts[2]);
+                continue;
+            }
+        };
+        let activity: i64 = match parts[3].parse() {
+            Ok(v) => v,
+            Err(_) => {
+                tracing::warn!("Skipping session '{name}': invalid activity value '{}'", parts[3]);
+                continue;
+            }
+        };
         sessions.push(RawSession {
             name,
             created,
@@ -287,10 +299,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_sessions_invalid_integer_returns_error() {
-        let output = "bad\tNOT_A_NUMBER\t1\t1700001000\n";
-        let result = parse_sessions(output);
-        assert!(result.is_err(), "should fail on invalid integer");
+    fn test_parse_sessions_invalid_integer_skips_line() {
+        let output = "bad\tNOT_A_NUMBER\t1\t1700001000\ngood\t1700000000\t0\t1700001000\n";
+        let sessions = parse_sessions(output).expect("should not fail");
+        // The malformed line is skipped; only the valid session is returned.
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "good");
     }
 
     #[test]

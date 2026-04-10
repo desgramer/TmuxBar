@@ -10,7 +10,7 @@ pub struct LaunchAgent;
 impl LaunchAgent {
     /// Returns the path to the LaunchAgent plist file.
     pub fn plist_path() -> PathBuf {
-        let home = dirs::home_dir().expect("cannot determine home directory");
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         home.join("Library")
             .join("LaunchAgents")
             .join("com.tmuxbar.plist")

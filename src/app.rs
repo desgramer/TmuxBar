@@ -21,6 +21,7 @@ use crate::infra::log_store::LogStore;
 use crate::infra::sys_probe::MacSysProbe;
 use crate::infra::tmux_client::TmuxClient;
 use crate::models::{AlertLevel, AppCommand, MonitorEvent, Session};
+use crate::ui::menu_action_handler::MenuActionHandler;
 use crate::ui::menu_bar::{self, MenuBarApp};
 use crate::ui::notifications::NotificationService;
 use crate::ui::session_menu::SessionMenuBuilder;
@@ -62,6 +63,33 @@ impl StatusItemPtr {
 unsafe impl Send for StatusItemPtr {}
 unsafe impl Sync for StatusItemPtr {}
 
+/// Wrapper around a raw pointer to `MenuActionHandler` so it can be sent into
+/// GCD main-queue dispatches from the timer thread.
+///
+/// # Safety
+///
+/// Same contract as `StatusItemPtr` — kept alive by `Retained<MenuActionHandler>`
+/// on the main thread, dereferenced only inside GCD main-queue closures.
+#[derive(Clone, Copy)]
+struct ActionHandlerPtr {
+    ptr: *const MenuActionHandler,
+}
+
+impl ActionHandlerPtr {
+    fn new(handler: &MenuActionHandler) -> Self {
+        Self {
+            ptr: handler as *const MenuActionHandler,
+        }
+    }
+
+    fn as_ptr(self) -> *const MenuActionHandler {
+        self.ptr
+    }
+}
+
+unsafe impl Send for ActionHandlerPtr {}
+unsafe impl Sync for ActionHandlerPtr {}
+
 /// State shared between the Tokio background thread and the AppKit main thread.
 ///
 /// The Tokio event-processing loop updates this on every monitor tick.
@@ -74,6 +102,9 @@ struct AppState {
     /// Raw pointer to the `NSStatusItem` for icon/menu updates dispatched to
     /// the main thread. `None` until the UI is initialised.
     status_item_ptr: Option<StatusItemPtr>,
+    /// Raw pointer to the `MenuActionHandler` for wiring menu items in GCD
+    /// dispatches. `None` until the UI is initialised.
+    action_handler_ptr: Option<ActionHandlerPtr>,
 }
 
 impl Default for AppState {
@@ -83,6 +114,7 @@ impl Default for AppState {
             alert_level: AlertLevel::Normal,
             fd_percent: 0,
             status_item_ptr: None,
+            action_handler_ptr: None,
         }
     }
 }
@@ -99,7 +131,7 @@ struct BackgroundServices {
     monitor_rx: Option<broadcast::Receiver<MonitorEvent>>,
     /// `None` when tmux is not available.
     session_manager: Option<SessionManager>,
-    restart_service: Option<RestartService>,
+    restart_service: Option<Arc<RestartService>>,
     event_services: EventServices,
     cmd_rx: mpsc::Receiver<AppCommand>,
     shared_state: Arc<Mutex<AppState>>,
@@ -279,12 +311,12 @@ pub fn run() {
                 None
             }
         };
-        RestartService::new(
+        Arc::new(RestartService::new(
             ss,
             Arc::clone(&tmux),
             restart_log_store_opt.map(EventLogger::new),
             NotificationService::new(),
-        )
+        ))
     });
 
     // ------------------------------------------------------------------
@@ -374,18 +406,22 @@ pub fn run() {
 
     let menu_bar = MenuBarApp::new(mtm);
 
-    // Store a raw pointer to the NSStatusItem so background threads can
-    // dispatch UI updates via GCD. The Retained<NSStatusItem> inside
-    // menu_bar keeps the object alive for the lifetime of the run loop.
+    // Create the menu action handler that routes NSMenuItem clicks to AppCommands.
+    let action_handler = MenuActionHandler::new(mtm, cmd_tx.clone());
+
+    // Store raw pointers so background threads can dispatch UI updates via GCD.
+    // The Retained values on the main thread keep the objects alive for the
+    // lifetime of the run loop.
     {
         let mut state = shared_state.lock().unwrap();
         state.status_item_ptr = Some(StatusItemPtr::new(menu_bar.status_item()));
+        state.action_handler_ptr = Some(ActionHandlerPtr::new(&action_handler));
     }
 
     // Build the initial menu from whatever sessions exist right now.
     {
         let state = shared_state.lock().unwrap();
-        let menu = SessionMenuBuilder::build_menu(mtm, &state.sessions);
+        let menu = SessionMenuBuilder::build_menu(mtm, &state.sessions, Some(&action_handler));
         menu_bar.set_menu(&menu);
     }
 
@@ -407,16 +443,20 @@ pub fn run() {
             let alert_level = state.alert_level.clone();
             let sessions = state.sessions.clone();
             let ptr_opt = state.status_item_ptr;
+            let handler_opt = state.action_handler_ptr;
             drop(state);
 
             if let Some(sip) = ptr_opt {
                 dispatch2::DispatchQueue::main().exec_async(move || {
                     if let Some(mtm) = MainThreadMarker::new() {
-                        // SAFETY: sip.as_ptr() is valid for the lifetime of the
-                        // NSApplication run loop and we are on the main thread.
+                        // SAFETY: sip/ahp pointers are valid for the lifetime of
+                        // the NSApplication run loop and we are on the main thread.
                         unsafe {
                             menu_bar::apply_alert_level_raw(sip.as_ptr(), &alert_level, mtm);
-                            let menu = SessionMenuBuilder::build_menu(mtm, &sessions);
+                            let handler_ref =
+                                handler_opt.map(|ahp| &*ahp.as_ptr());
+                            let menu =
+                                SessionMenuBuilder::build_menu(mtm, &sessions, handler_ref);
                             menu_bar::set_menu_raw(sip.as_ptr(), &menu);
                         }
                     }
@@ -426,11 +466,13 @@ pub fn run() {
     });
 
     // Build the initial menu with real tmux data.
-    setup_initial_menu(&shared_state, &menu_bar, &config, mtm);
+    setup_initial_menu(&shared_state, &menu_bar, &action_handler, &config, mtm);
 
-    // Keep cmd_tx alive so the background thread's cmd_rx stays open.
-    // It will be dropped when the NSApplication run loop exits.
+    // Keep cmd_tx and action_handler alive so the background thread's cmd_rx
+    // stays open and menu items can dispatch commands. They will be dropped
+    // when the NSApplication run loop exits.
     let _cmd_tx = cmd_tx;
+    let _action_handler = action_handler;
 
     // ------------------------------------------------------------------
     // h. Start NSApplication run loop (blocks main thread)
@@ -520,8 +562,16 @@ async fn run_background(services: BackgroundServices) {
             AppCommand::RestartServer => {
                 match &restart_service {
                     Some(svc) => {
-                        if let Err(e) = svc.execute_restart() {
-                            tracing::error!("Safe restart failed: {e:#}");
+                        let svc = Arc::clone(svc);
+                        // Run on a blocking thread so std::thread::sleep inside
+                        // execute_restart() does not block the Tokio runtime.
+                        let result = tokio::task::spawn_blocking(move || {
+                            svc.execute_restart()
+                        }).await;
+                        match result {
+                            Ok(Err(e)) => tracing::error!("Safe restart failed: {e:#}"),
+                            Err(e) => tracing::error!("Restart task panicked: {e}"),
+                            _ => {}
                         }
                     }
                     None => {
@@ -696,6 +746,7 @@ fn handle_monitor_event(
 fn setup_initial_menu(
     _shared_state: &Arc<Mutex<AppState>>,
     menu_bar: &MenuBarApp,
+    handler: &MenuActionHandler,
     config: &AppConfig,
     mtm: MainThreadMarker,
 ) {
@@ -707,12 +758,12 @@ fn setup_initial_menu(
     );
     match session_mgr.list_sessions() {
         Ok(sessions) => {
-            let menu = SessionMenuBuilder::build_menu(mtm, &sessions);
+            let menu = SessionMenuBuilder::build_menu(mtm, &sessions, Some(handler));
             menu_bar.set_menu(&menu);
         }
         Err(e) => {
             tracing::warn!("Failed to list sessions for initial menu: {e:#}");
-            let menu = SessionMenuBuilder::build_menu(mtm, &[]);
+            let menu = SessionMenuBuilder::build_menu(mtm, &[], Some(handler));
             menu_bar.set_menu(&menu);
         }
     }

@@ -127,8 +127,9 @@ impl SnapshotService {
             // Send each pane to its recorded working directory.
             for pane in &window.panes {
                 let target = format!("{}:{}.{}", snapshot.name, window_idx, pane.index);
+                let escaped_dir = pane.working_dir.replace('\'', "'\\''");
                 self.tmux
-                    .send_keys(&target, &format!("cd {}", pane.working_dir))?;
+                    .send_keys(&target, &format!("cd '{escaped_dir}'"))?;
             }
 
             // Apply the recorded layout for this window.
@@ -532,9 +533,9 @@ mod tests {
             log.contains(&"new_session:myapp".to_string()),
             "expected new_session:myapp in {log:?}"
         );
-        // cd command sent to first pane
+        // cd command sent to first pane (path is single-quoted)
         assert!(
-            log.contains(&"send_keys:myapp:0.0:cd /home/user/project".to_string()),
+            log.contains(&"send_keys:myapp:0.0:cd '/home/user/project'".to_string()),
             "expected send_keys for pane 0 in {log:?}"
         );
         // Layout applied
@@ -594,19 +595,19 @@ mod tests {
             "expected split_window for window 0 in {log:?}"
         );
 
-        // cd sent to both panes of window 0
+        // cd sent to both panes of window 0 (paths are single-quoted)
         assert!(
-            log.contains(&"send_keys:work:0.0:cd /src".to_string()),
+            log.contains(&"send_keys:work:0.0:cd '/src'".to_string()),
             "{log:?}"
         );
         assert!(
-            log.contains(&"send_keys:work:0.1:cd /src/tests".to_string()),
+            log.contains(&"send_keys:work:0.1:cd '/src/tests'".to_string()),
             "{log:?}"
         );
 
         // cd sent to pane in window 1
         assert!(
-            log.contains(&"send_keys:work:1.0:cd /srv".to_string()),
+            log.contains(&"send_keys:work:1.0:cd '/srv'".to_string()),
             "{log:?}"
         );
 

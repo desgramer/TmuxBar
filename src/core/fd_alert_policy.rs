@@ -82,6 +82,8 @@ impl FdAlertPolicy {
     pub fn current_level(&self, current_pct: u8) -> AlertLevel {
         if current_pct >= self.config.crit_pct {
             AlertLevel::Critical
+        } else if current_pct >= self.config.elevated_pct {
+            AlertLevel::Elevated
         } else if current_pct >= self.config.warn_pct {
             AlertLevel::Warning
         } else {
@@ -199,8 +201,8 @@ mod tests {
         assert_eq!(policy.current_level(84), AlertLevel::Normal);
         assert_eq!(policy.current_level(85), AlertLevel::Warning);
         assert_eq!(policy.current_level(89), AlertLevel::Warning);
-        assert_eq!(policy.current_level(90), AlertLevel::Warning);
-        assert_eq!(policy.current_level(94), AlertLevel::Warning);
+        assert_eq!(policy.current_level(90), AlertLevel::Elevated);
+        assert_eq!(policy.current_level(94), AlertLevel::Elevated);
         assert_eq!(policy.current_level(95), AlertLevel::Critical);
         assert_eq!(policy.current_level(99), AlertLevel::Critical);
         assert_eq!(policy.current_level(100), AlertLevel::Critical);

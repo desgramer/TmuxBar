@@ -56,9 +56,25 @@ impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
             app: "Ghostty".to_string(),
-            tmux_path: "/opt/homebrew/bin/tmux".to_string(),
+            tmux_path: detect_tmux_path(),
         }
     }
+}
+
+/// Search common locations for the tmux binary.
+/// Returns the first path that exists, or falls back to "tmux" (relying on PATH).
+fn detect_tmux_path() -> String {
+    let candidates = [
+        "/opt/homebrew/bin/tmux", // Apple Silicon Homebrew
+        "/usr/local/bin/tmux",    // Intel Homebrew / manual install
+        "/usr/bin/tmux",          // Xcode CLT / system
+    ];
+    for path in &candidates {
+        if std::path::Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+    "tmux".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +130,7 @@ impl AppConfig {
     /// Returns the canonical path to the config file:
     /// `~/.config/tmuxbar/config.toml`
     pub fn config_path() -> PathBuf {
-        let home = dirs::home_dir().expect("cannot determine home directory");
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         home.join(".config").join("tmuxbar").join("config.toml")
     }
 

@@ -1,9 +1,11 @@
 use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSMenu, NSMenuItem};
 use objc2_foundation::NSString;
 
 use crate::models::{Session, SessionStats};
+use crate::ui::menu_action_handler::MenuActionHandler;
 
 // ---------------------------------------------------------------------------
 // Tag constants for menu item identification
@@ -21,9 +23,9 @@ pub const TAG_QUIT: isize = 1003;
 
 /// Builds an `NSMenu` from a list of tmux sessions.
 ///
-/// The menu is rebuilt each time the user clicks the status bar icon, using
-/// fresh session data. Action handling is deferred to the app wiring phase
-/// (Task 15) — items are identified by their `tag` value.
+/// The menu is rebuilt each time the status bar icon is refreshed, using fresh
+/// session data. Each item's target/action is wired to the provided
+/// `MenuActionHandler` so that clicks dispatch `AppCommand`s.
 pub struct SessionMenuBuilder;
 
 impl SessionMenuBuilder {
@@ -33,15 +35,24 @@ impl SessionMenuBuilder {
     /// to its index in `sessions`. Fixed action items ("New Session…", "Kill
     /// Server", "Settings", "Quit") use well-known tag constants.
     ///
-    /// No action selectors are wired here — the caller is responsible for
-    /// attaching a delegate or target/action pair to handle clicks.
-    pub fn build_menu(mtm: MainThreadMarker, sessions: &[Session]) -> Retained<NSMenu> {
+    /// When `handler` is `Some`, every item gets a target/action pair so that
+    /// clicks are routed to `MenuActionHandler::menu_item_clicked:`.
+    pub fn build_menu(
+        mtm: MainThreadMarker,
+        sessions: &[Session],
+        handler: Option<&MenuActionHandler>,
+    ) -> Retained<NSMenu> {
         let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("TmuxBar"));
+
+        // Keep the handler's name list in sync with the tag indices.
+        if let Some(h) = handler {
+            h.update_session_names(sessions.iter().map(|s| s.name.clone()).collect());
+        }
 
         // --- Session items ---
         for (idx, session) in sessions.iter().enumerate() {
             let title = format_session_title(session);
-            let item = make_item(mtm, &title);
+            let item = make_item(mtm, &title, handler);
             item.setTag(idx as isize);
             item.setEnabled(true);
             menu.addItem(&item);
@@ -53,21 +64,21 @@ impl SessionMenuBuilder {
         }
 
         // --- Fixed action items ---
-        let new_session = make_item(mtm, "New Session...");
+        let new_session = make_item(mtm, "New Session...", handler);
         new_session.setTag(TAG_NEW_SESSION);
         menu.addItem(&new_session);
 
-        let kill_server = make_item(mtm, "Kill Server");
+        let kill_server = make_item(mtm, "Kill Server", handler);
         kill_server.setTag(TAG_KILL_SERVER);
         menu.addItem(&kill_server);
 
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-        let settings = make_item(mtm, "Settings");
+        let settings = make_item(mtm, "Settings", handler);
         settings.setTag(TAG_SETTINGS);
         menu.addItem(&settings);
 
-        let quit = make_item(mtm, "Quit");
+        let quit = make_item(mtm, "Quit", handler);
         quit.setTag(TAG_QUIT);
         menu.addItem(&quit);
 
@@ -131,20 +142,33 @@ fn format_memory(bytes: u64) -> String {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Create an `NSMenuItem` with the given title, no action, and no key
-/// equivalent.
-fn make_item(mtm: MainThreadMarker, title: &str) -> Retained<NSMenuItem> {
+/// Create an `NSMenuItem` with the given title and optional action handler.
+fn make_item(
+    mtm: MainThreadMarker,
+    title: &str,
+    handler: Option<&MenuActionHandler>,
+) -> Retained<NSMenuItem> {
     let ns_title = NSString::from_str(title);
     let empty = NSString::from_str("");
-    // SAFETY: passing `None` for the selector is valid — no action is wired.
-    unsafe {
+    let sel = handler.map(|_| MenuActionHandler::action_sel());
+
+    // SAFETY: the selector (if set) matches MenuActionHandler's registered method.
+    let item = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
             &ns_title,
-            None,
+            sel,
             &empty,
         )
+    };
+
+    if let Some(h) = handler {
+        let target: &AnyObject = h;
+        // SAFETY: target is a valid NSObject subclass that responds to the selector.
+        unsafe { item.setTarget(Some(target)) };
     }
+
+    item
 }
 
 // ---------------------------------------------------------------------------
