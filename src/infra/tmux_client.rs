@@ -246,6 +246,10 @@ impl TmuxAdapter for TmuxClient {
         self.run_tmux(&["select-layout", "-t", target, layout])?;
         Ok(())
     }
+
+    fn get_global_option(&self, name: &str) -> Result<String> {
+        self.run_tmux(&["show-option", "-gv", name])
+    }
 }
 
 // ---------------------------------------------------------------------------

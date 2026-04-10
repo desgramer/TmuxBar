@@ -117,11 +117,13 @@ impl SessionManager {
         let safe_name = sanitize_for_shell(session_name);
 
         if self.terminal_app.eq_ignore_ascii_case("ghostty") {
-            // Ghostty's -e expects the full command as a single argument.
-            let cmd = format!("{} attach -t {}", self.tmux_path, safe_name);
+            // Ghostty -e takes the command and arguments as separate args.
             let result = Command::new("open")
-                .args(["-na", "Ghostty.app", "--args", "-e", &cmd])
-                .status(); // .status() waits for completion, preventing zombie
+                .args([
+                    "-na", "Ghostty.app", "--args",
+                    "-e", &self.tmux_path, "attach", "-t", &safe_name,
+                ])
+                .status();
 
             match result {
                 Ok(s) if s.success() => return Ok(()),
@@ -256,6 +258,9 @@ mod tests {
         fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> { Ok(()) }
         fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> { Ok(()) }
         fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> { Ok(()) }
+        fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
+            Ok("0".to_string())
+        }
     }
 
     // -----------------------------------------------------------------------

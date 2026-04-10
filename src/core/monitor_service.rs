@@ -251,6 +251,9 @@ mod tests {
         fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> { Ok(()) }
         fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> { Ok(()) }
         fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> { Ok(()) }
+        fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
+            Ok("0".to_string())
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -634,6 +634,9 @@ async fn run_background(services: BackgroundServices) {
                     }
                 }
             }
+            AppCommand::OpenSettings => {
+                tracing::info!("OpenSettings command received (not yet implemented)");
+            }
             AppCommand::Quit => {
                 tracing::info!("Quit command received, shutting down");
                 break;

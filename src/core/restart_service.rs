@@ -304,6 +304,9 @@ mod tests {
         fn split_window(&self, _session: &str, _window: &str) -> anyhow::Result<()> { Ok(()) }
         fn send_keys(&self, _target: &str, _keys: &str) -> anyhow::Result<()> { Ok(()) }
         fn select_layout(&self, _target: &str, _layout: &str) -> anyhow::Result<()> { Ok(()) }
+        fn get_global_option(&self, _name: &str) -> anyhow::Result<String> {
+            Ok("0".to_string())
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -384,6 +387,9 @@ mod tests {
             fn split_window(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
             fn send_keys(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
             fn select_layout(&self, _: &str, _: &str) -> Result<()> { Ok(()) }
+            fn get_global_option(&self, _: &str) -> anyhow::Result<String> {
+                Ok("0".to_string())
+            }
         }
 
         let tmux: Arc<dyn TmuxAdapter> = Arc::new(FailListSessions);

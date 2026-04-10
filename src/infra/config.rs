@@ -119,12 +119,14 @@ impl Default for SnapshotsConfig {
 #[serde(default)]
 pub struct GeneralConfig {
     pub launch_at_login: bool,
+    pub language: String,
 }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             launch_at_login: true,
+            language: "en".to_string(),
         }
     }
 }
@@ -167,6 +169,10 @@ impl AppConfig {
             let default_cfg = AppConfig::default();
             let toml_str = toml::to_string_pretty(&default_cfg)
                 .context("failed to serialize default config")?;
+            let toml_str = toml_str.replace(
+                "language = \"en\"",
+                "# 한국어 = \"ko\", English = \"en\", 日本語 = \"ja\", 中文 = \"zh\"\nlanguage = \"en\"",
+            );
             std::fs::write(&path, &toml_str)
                 .with_context(|| format!("failed to write default config to {}", path.display()))?;
             let mut cfg = default_cfg;

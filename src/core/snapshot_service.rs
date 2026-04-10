@@ -330,6 +330,11 @@ mod tests {
             self.record(format!("select_layout:{target}:{layout}"));
             Ok(())
         }
+
+        fn get_global_option(&self, name: &str) -> Result<String> {
+            self.record(format!("get_global_option:{name}"));
+            Ok("0".to_string())
+        }
     }
 
     // -----------------------------------------------------------------------
