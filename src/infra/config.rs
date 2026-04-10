@@ -247,7 +247,7 @@ mod tests {
     fn test_default_terminal() {
         let cfg = AppConfig::default();
         assert_eq!(cfg.terminal.app, "Ghostty");
-        assert_eq!(cfg.terminal.tmux_path, "/opt/homebrew/bin/tmux");
+        assert_eq!(cfg.terminal.tmux_path, detect_tmux_path());
     }
 
     #[test]
@@ -328,7 +328,7 @@ app = "iTerm2"
 "#;
         let cfg = from_toml(toml_str).expect("parse failed");
         assert_eq!(cfg.terminal.app, "iTerm2");
-        assert_eq!(cfg.terminal.tmux_path, "/opt/homebrew/bin/tmux");
+        assert_eq!(cfg.terminal.tmux_path, detect_tmux_path());
         // Other sections are defaults.
         assert_eq!(cfg.monitor.poll_interval_secs, 3);
     }
@@ -413,7 +413,7 @@ app = "Alacritty"
         cfg.expand_tilde();
 
         assert_eq!(cfg.terminal.app, "Alacritty");
-        assert_eq!(cfg.terminal.tmux_path, "/opt/homebrew/bin/tmux");
+        assert_eq!(cfg.terminal.tmux_path, detect_tmux_path());
         assert_eq!(cfg.monitor.poll_interval_secs, 3);
         assert!(cfg.general.launch_at_login);
     }
